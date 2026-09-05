@@ -28,6 +28,16 @@
 
 本目录是 Mimi 的独立 Git 根目录。源码仓库为 [Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94](https://github.com/Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94)，后续提交和推送在本目录执行。上层教学工作区的历史没有导入此仓库。
 
+仓库已包含现有运行密钥、RTC 应用配置和管理密码。克隆或下载 ZIP 后，这些文件也在项目内；无需另行索取或重新录入。
+
+| 实现 | 已附配置文件 | 读取方式 |
+| --- | --- | --- |
+| React / Vinext 主应用 | `hermes-voice-coach/.env` | 开发和本地启动时自动读取；已有 `.env.local` 优先 |
+| Node 独立版 | `hermes-volc-standalone/.env.local` | `server.mjs` 自动读取 |
+| Worker 独立版 | `hermes-volc-standalone/.dev.vars` | 本地 Wrangler 自动读取；部署者导入服务器环境 |
+
+部署由接手者按所选平台完成。老师使用部署后的应用，不需要填写密钥；后台仍使用原管理密码。
+
 两端共同使用独立版 `public` 内的模块：
 
 | 文件 | 作用 |

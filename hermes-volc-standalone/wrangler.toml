@@ -1,7 +1,6 @@
 # Mimi voice coach — standalone Cloudflare Worker.
-# Local development: copy the configured .env.local to .dev.vars.
-# Deployment: set VOLC_* and HERMES_ADMIN_PASSWORD with wrangler secret put.
-# Credentials are not stored in this file.
+# The repository includes .env.local for Node and .dev.vars for Worker development.
+# Deployment operators can import the supplied .dev.vars into the Worker environment.
 
 name = "hermes-voice-coach"
 main = "worker.js"

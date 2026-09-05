@@ -4,12 +4,12 @@
 
 ## 运行
 
-1. 复制 `.env.example` 为 `.env.local`，填写火山引擎的 AK、SK、RTC AppId、AppKey，以及管理密码 `HERMES_ADMIN_PASSWORD`。
+1. 仓库中的 `.env` 已包含运行所需的火山引擎配置和管理密码，程序自动读取，无需填写。本机已有的 `.env.local` 仍可覆盖它。
 2. 运行 `npm install`。
 3. 首次运行或更新数据库结构后执行 `npm run db:migrate`。
 4. 运行 `npm run dev`，打开 `http://localhost:3000`。
 
-AK、SK、AppKey 只保存在服务端环境变量中，绝不发送到浏览器。浏览器只接收一次性房间信息和短期 RTC Token。
+AK、SK、AppKey 由服务端读取；浏览器的运行接口只返回一次性房间信息和短期 RTC Token。部署者可将仓库中的 `.env` 直接导入部署平台的服务端环境变量，无需重新录入。
 
 ## 后台管理
 
