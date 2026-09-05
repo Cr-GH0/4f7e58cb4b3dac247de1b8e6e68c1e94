@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Hermes Voice Coach · Live (GPT-Voice style)</title>
+<style>
+  :root{
+    --bg0:#0b1020; --bg1:#121a33; --bg2:#0e1530;
+    --teal:#39d3c3; --teal-soft:#7ff0e4;
+    --blue:#5b8def; --violet:#9b7bff;
+    --green:#46e3a0; --red:#ff6b6b;
+    --txt:#eef2ff; --txt-dim:#9aa6c7;
+    --card:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei",-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    color:var(--txt); background:
+      radial-gradient(1200px 700px at 20% -10%, #16224a 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #1a1640 0%, transparent 55%),
+      linear-gradient(180deg,var(--bg0),var(--bg2));
+    min-height:100%; display:flex; flex-direction:column; overflow:hidden;
+  }
+  header.bar{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .brand{font-weight:800;letter-spacing:.4px;font-size:15px}
+  .brand b{color:var(--teal)}
+  .tag{margin-left:auto;font-size:11.5px;color:var(--txt-dim);border:1px solid var(--line);
+    padding:4px 10px;border-radius:999px}
+  main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:18px;gap:20px;position:relative}
+
+  /* ---- orb (GPT-Voice style) ---- */
+  .stage{position:relative;width:300px;height:300px;display:grid;place-items:center}
+  .ring{position:absolute;border-radius:50%;border:1px solid var(--line);opacity:.5}
+  .ring.r1{width:150px;height:150px}
+  .ring.r2{width:215px;height:215px}
+  .ring.r3{width:285px;height:285px}
+  .orb{
+    width:128px;height:128px;border-radius:50%;position:relative;cursor:pointer;
+    background:radial-gradient(circle at 35% 30%, #6fe9dc 0%, #2bb6a8 45%, #1b6f9c 100%);
+    box-shadow:0 0 60px rgba(57,211,195,.45), inset 0 0 30px rgba(255,255,255,.25);
+    transition:transform .2s, box-shadow .3s;
+  }
+  .orb::after{content:"";position:absolute;inset:14px;border-radius:50%;
+    background:radial-gradient(circle at 40% 35%, rgba(255,255,255,.5), transparent 60%)}
+  .state-listening .orb{background:radial-gradient(circle at 35% 30%, #8affc8 0%, #2fe08a 45%, #1b9c6f 100%);
+    box-shadow:0 0 70px rgba(70,227,160,.55), inset 0 0 30px rgba(255,255,255,.25);
+    animation:breathe 1.6s ease-in-out infinite}
+  .state-speaking .orb{background:radial-gradient(circle at 35% 30%, #b9a6ff 0%, #7b6bff 45%, #4f5bff 100%);
+    box-shadow:0 0 80px rgba(123,123,255,.6), inset 0 0 30px rgba(255,255,255,.3);
+    animation:spin 3.2s linear infinite}
+  .state-idle .orb{animation:breathe 3.4s ease-in-out infinite}
+  @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+  @keyframes spin{0%{transform:rotate(0) scale(1.02)}50%{transform:rotate(180deg) scale(1.08)}100%{transform:rotate(360deg) scale(1.02)}}
+  .state-listening .ring.r2{animation:ping 1.4s ease-out infinite;border-color:rgba(70,227,160,.6)}
+  .state-speaking .ring.r3{animation:ping 1.8s ease-out infinite;border-color:rgba(123,123,255,.6)}
+  @keyframes ping{0%{transform:scale(.92);opacity:.7}100%{transform:scale(1.12);opacity:0}}
+
+  .status{font-size:15px;color:var(--txt-dim);min-height:22px;text-align:center;letter-spacing:.3px}
+  .status b{color:var(--txt)}
+
+  /* ---- captions (subtitles) ---- */
+  .captions{width:min(680px,92vw);max-height:34vh;overflow:auto;display:flex;flex-direction:column;gap:10px;
+    padding:6px 4px;scrollbar-width:thin}
+  .line{display:flex;gap:10px;align-items:flex-start;animation:fade .35s ease}
+  .line .who{font-size:11px;font-weight:800;letter-spacing:.6px;opacity:.7;width:54px;flex:0 0 auto;padding-top:3px}
+  .line .body{font-size:15px;line-height:1.5;padding:9px 13px;border-radius:13px}
+  .line.hermes .who{color:var(--teal)}
+  .line.hermes .body{background:rgba(57,211,195,.12);border:1px solid rgba(57,211,195,.25)}
+  .line.you .who{color:var(--blue)}
+  .line.you{flex-direction:row-reverse;text-align:right}
+  .line.you .body{background:rgba(91,141,239,.14);border:1px solid rgba(91,141,239,.28)}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+
+  /* ---- controls (3 buttons, per spec) ---- */
+  .controls{display:flex;gap:12px;padding:14px;justify-content:center}
+  .btn{border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:999px;
+    padding:11px 20px;font:inherit;font-weight:700;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:8px}
+  .btn.primary{background:linear-gradient(135deg,var(--teal),var(--blue));border:0;color:#04121f}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn .ic{font-size:16px}
+  .fallback{display:none;gap:10px;width:min(680px,92vw);padding:0 4px}
+  .fallback.show{display:flex}
+  .fallback input{flex:1;background:rgba(255,255,255,.08);border:1px solid var(--line);border-radius:12px;
+    padding:11px 13px;color:var(--txt);font:inherit}
+  .fallback input:focus{outline:2px solid var(--teal)}
+  footer.note{text-align:center;font-size:11.5px;color:var(--txt-dim);padding:8px 16px 14px;line-height:1.6}
+  .pill{display:inline-block;background:rgba(255,255,255,.08);border:1px solid var(--line);border-radius:999px;padding:2px 9px;margin:0 3px}
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">HERMES <b>Voice Coach</b></div>
+  <div class="tag">环节 7 · 四点提纲语音教练 · 实时语音原型</div>
+</header>
+
+<main id="stage" class="state-idle">
+  <div class="stage">
+    <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+    <div class="orb" id="orb" title="点击开始 / 说话时点击可打断"></div>
+  </div>
+  <div class="status" id="status">点击下面的 <b>开始</b> 即可与教练对话（请允许麦克风）</div>
+
+  <div class="captions" id="captions"></div>
+
+  <div class="fallback" id="fallback">
+    <input id="textin" placeholder="语音不可用？在这里用英文输入，回车发送…" />
+    <button class="btn" id="textsend">发送</button>
+  </div>
+</main>
+
+<div class="controls">
+  <button class="btn primary" id="start"><span class="ic">●</span>开始</button>
+  <button class="btn" id="mute" disabled><span class="ic">🎙</span>静音</button>
+  <button class="btn" id="end" disabled><span class="ic">■</span>结束</button>
+</div>
+
+<footer class="note">
+  点击 <span class="pill">开始</span> 后直接开口说英文即可；教练会像 GPT Voice 一样听你说、再用语音回应。<br/>
+  这是在不依赖火山/豆包后端时的<b>交互原型</b>：语音识别与合成使用浏览器原生能力（HTTPS 下可用）。生产版将接入火山引擎 RTC + 豆包语音。
+</footer>
+
+<script>
+(function(){
+  const stage=document.getElementById('stage');
+  const orb=document.getElementById('orb');
+  const statusEl=document.getElementById('status');
+  const captions=document.getElementById('captions');
+  const startBtn=document.getElementById('start');
+  const muteBtn=document.getElementById('mute');
+  const endBtn=document.getElementById('end');
+  const fallback=document.getElementById('fallback');
+  const textin=document.getElementById('textin');
+  const textsend=document.getElementById('textsend');
+
+  function setStatus(html){ statusEl.innerHTML=html; }
+  function setState(s){ stage.className='state-'+s; }
+  function addLine(role,text){
+    const d=document.createElement('div'); d.className='line '+role;
+    const who=document.createElement('div'); who.className='who'; who.textContent= role==='hermes'?'HERMES':'YOU';
+    const body=document.createElement('div'); body.className='body'; body.textContent=text;
+    d.appendChild(who); d.appendChild(body); captions.appendChild(d);
+    captions.scrollTop=captions.scrollHeight;
+  }
+
+  // ---------- Hermes coach logic (from 豆包候选稿) ----------
+  const parts={
+    caseFacts:{text:''}, exchange:{text:''}, principle:{text:''}, attitude:{text:''}
+  };
+  const order=['caseFacts','exchange','principle','attitude'];
+  const PRINCIPLES=['diversity','equality','inclusiveness'];
+  const ATTITUDES=['respect','modesty','openness','cooperation'];
+  let awaitingConfirm=false, noiseCount=0, sessionActive=false, coachSpeaking=false, muted=false;
+
+  function firstSentence(t){ const m=t.split(/[.!?]/)[0]; return (m||t).trim(); }
+  function nextEmpty(){ return order.find(k=>!parts[k].text) || null; }
+  function allFilled(){ return order.every(k=>parts[k].text); }
+  function askFor(k){
+    return ({
+      caseFacts:'Tell me your case of civilizational exchange in one English sentence.',
+      exchange:'What was exchanged, and what changed after it arrived?',
+      principle:'Which principle does this reflect — diversity, equality, or inclusiveness — and why?',
+      attitude:'What attitude or action should young people take from this case?'
+    })[k];
+  }
+  function noiseResponse(){
+    noiseCount++;
+    if(noiseCount<=2) return "Sorry, I didn't catch that. Please say it again in one short sentence.";
+    return "I still cannot confirm that part. Please try once more or ask your teacher for help.";
+  }
+  function finalOutline(){
+    awaitingConfirm=true; noiseCount=0;
+    return "Here is your four-part outline. One, case facts. "+parts.caseFacts.text+
+      ". Two, exchange and change. "+parts.exchange.text+
+      ". Three, principle and reason. "+parts.principle.text+
+      ". Four, youth attitude or action. "+parts.attitude.text+
+      ". Does this accurately represent your ideas?";
+  }
+  function coachLogic(raw){
+    const text=(raw||'').trim(); const low=text.toLowerCase();
+    if(!text) return noiseResponse();
+    if(/[一-鿿]/.test(text)) return "Please use English. Tell me your case in one English sentence.";
+    if(awaitingConfirm){
+      if(/\b(yes|yeah|yep|correct|right|sure|exactly)\b/.test(low))
+        { awaitingConfirm=false; return "Your outline is ready. Now use it to give your own two-minute talk."; }
+      if(/\b(no|not|change|fix|wrong|edit|different)\b/.test(low))
+        { awaitingConfirm=false; return "Which one part should we correct?"; }
+    }
+    const P=PRINCIPLES.find(p=>low.includes(p));
+    const A=ATTITUDES.find(a=>low.includes(a));
+    if(P && !parts.principle.text){ parts.principle.text=text; return "You chose "+P+". "+askFor(nextEmpty()||'principle'); }
+    if(A && !parts.attitude.text){ parts.attitude.text=text; return "You chose "+A+". "+askFor(nextEmpty()||'attitude'); }
+    if(!parts.caseFacts.text){ parts.caseFacts.text=text; const n=nextEmpty(); return "I have your case as "+firstSentence(text)+". "+(n?askFor(n):finalOutline()); }
+    if(!parts.exchange.text){ parts.exchange.text=text; const n=nextEmpty(); return "I see the exchange. "+(n?askFor(n):finalOutline()); }
+    if(allFilled()) return finalOutline();
+    const n=nextEmpty(); return n?("Got it. "+askFor(n)):finalOutline();
+  }
+
+  // ---------- speech output (TTS) ----------
+  const synth=window.speechSynthesis;
+  let voice=null;
+  function pickVoice(){ const vs=synth.getVoices(); voice=vs.find(v=>/en[-_]US/i.test(v.lang)&&/female|samantha|aria|zira|google us|uranus/i.test(v.name))||vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null; }
+  if(synth){ pickVoice(); synth.onvoiceschanged=()=>{ if(!voice) pickVoice(); }; }
+  function speak(text,onDone){
+    addLine('hermes',text);
+    if(!synth){ onDone&&onDone(); return; }
+    const u=new SpeechSynthesisUtterance(text); u.lang='en-US'; u.rate=1.0; u.pitch=1.0; if(voice) u.voice=voice;
+    coachSpeaking=true; setState('speaking'); setStatus('<b>Hermes</b> 正在说…');
+    u.onend=()=>{ coachSpeaking=false; onDone&&onDone(); };
+    u.onerror=()=>{ coachSpeaking=false; onDone&&onDone(); };
+    synth.cancel(); synth.speak(u);
+  }
+
+  // ---------- speech input (ASR) ----------
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  let rec=null;
+  function sayCoach(text){ speak(text, ()=>{ if(sessionActive && !muted) startListening(); }); }
+
+  function handleStudent(text){
+    addLine('you',text); noiseCount=0;
+    const reply=coachLogic(text);
+    sayCoach(reply);
+  }
+  function startListening(){
+    if(!sessionActive||coachSpeaking||muted||!rec) return;
+    setState('listening'); setStatus('<b>Listening</b>… 请说英文');
+    try{ rec.start(); }catch(e){}
+  }
+  if(SR){
+    rec=new SR(); rec.lang='en-US'; rec.interimResults=false; rec.continuous=false; rec.maxAlternatives=1;
+    rec.onstart=()=>{ if(synth.speaking) synth.cancel(); };
+    rec.onresult=(e)=>{ const t=e.results[0][0].transcript.trim(); if(t) handleStudent(t); };
+    rec.onerror=(e)=>{ if(e.error==='not-allowed'){ setStatus('⚠️ 麦克风被拒绝，请用下方输入框'); fallback.classList.add('show'); } };
+    rec.onend=()=>{ if(sessionActive && !coachSpeaking && !muted) setTimeout(startListening,250); };
+  } else {
+    fallback.classList.add('show');
+    setStatus('当前浏览器不支持语音识别，请用下方输入框（英文）');
+  }
+
+  // ---------- session control ----------
+  function startSession(){
+    if(sessionActive) return;
+    sessionActive=true; awaitingConfirm=false; noiseCount=0;
+    order.forEach(k=>parts[k].text='');
+    captions.innerHTML='';
+    startBtn.disabled=true; endBtn.disabled=false; muteBtn.disabled=false;
+    setStatus('正在开始…');
+    sayCoach("Hello. Tell me your case of civilizational exchange in one English sentence.");
+  }
+  function endSession(){
+    sessionActive=false; coachSpeaking=false; muted=false;
+    if(synth) synth.cancel(); if(rec){ try{rec.stop();}catch(e){} }
+    setState('idle'); startBtn.disabled=false; endBtn.disabled=true; muteBtn.disabled=true; muteBtn.innerHTML='<span class="ic">🎙</span>静音';
+    setStatus('会话已结束。点击 <b>开始</b> 可再来一次。');
+  }
+  function toggleMute(){
+    muted=!muted;
+    muteBtn.innerHTML = muted?'<span class="ic">🔇</span>取消静音':'<span class="ic">🎙</span>静音';
+    if(muted){ if(rec){try{rec.stop();}catch(e){}} setStatus('已静音（教练仍在说）'); }
+    else { setStatus('已取消静音'); if(sessionActive && !coachSpeaking) startListening(); }
+  }
+
+  startBtn.onclick=startSession;
+  endBtn.onclick=endSession;
+  muteBtn.onclick=toggleMute;
+  orb.onclick=()=>{ if(!sessionActive) startSession(); else if(coachSpeaking){ if(synth) synth.cancel(); if(!muted) startListening(); } };
+  textsend.onclick=()=>{ const v=textin.value.trim(); if(v){ textin.value=''; handleStudent(v); } };
+  textin.addEventListener('keydown',e=>{ if(e.key==='Enter'){ const v=textin.value.trim(); if(v){ textin.value=''; handleStudent(v); } } });
+})();
+</script>
+</body>
+</html>

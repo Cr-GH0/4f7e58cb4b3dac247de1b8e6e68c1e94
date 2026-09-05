@@ -1,0 +1,19 @@
+# Mimi voice coach — standalone Cloudflare Worker.
+# Local development: copy the configured .env.local to .dev.vars.
+# Deployment: set VOLC_* and HERMES_ADMIN_PASSWORD with wrangler secret put.
+# Credentials are not stored in this file.
+
+name = "hermes-voice-coach"
+main = "worker.js"
+compatibility_date = "2026-05-15"
+compatibility_flags = ["nodejs_compat"]
+
+assets = { directory = "./public", binding = "ASSETS" }
+
+# Local schema shares the main application's migration. Replace database_id with
+# the target D1 database before any future deployment.
+[[d1_databases]]
+binding = "DB"
+database_name = "hermes-settings"
+database_id = "00000000-0000-4000-8000-000000000000"
+migrations_dir = "../hermes-voice-coach/drizzle"

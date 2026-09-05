@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermes Voice Coach · 四点提纲语音教练（原型）</title>
+<style>
+  :root{
+    --rice:#E7E6CB;        /* 米白 */
+    --rice-2:#F2F1E4;
+    --ink:#2B2B28;
+    --ink-soft:#5a5a52;
+    --green:#2E6E5D;       /* 青绿 */
+    --green-soft:#3f8a76;
+    --red:#B5412F;         /* 朱红 */
+    --red-soft:#cf5b46;
+    --line:#cdcbb2;
+    --card:#fffdf6;
+    --shadow:0 6px 22px rgba(46,110,93,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei",-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(1100px 600px at 12% -8%, #f3f2e6 0%, transparent 60%),
+      radial-gradient(900px 520px at 100% 0%, #dff0e9 0%, transparent 55%),
+      var(--rice);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:22px 18px 40px}
+  header.top{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:14px 18px;border-radius:16px;background:var(--card);
+    box-shadow:var(--shadow);border:1px solid var(--line);
+  }
+  .logo{
+    width:46px;height:46px;border-radius:13px;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--green),var(--green-soft));
+    color:#fff;display:grid;place-items:center;font-weight:800;font-size:20px;
+    box-shadow:0 4px 12px rgba(46,110,93,.35);
+  }
+  .ttl{font-size:20px;font-weight:800;letter-spacing:.3px}
+  .ttl small{display:block;font-weight:600;font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+  .badge{margin-left:auto;font-size:12px;color:var(--red);background:#fbe9e4;
+    border:1px solid #f0c4b8;padding:5px 11px;border-radius:999px;font-weight:700}
+  .grid{display:grid;grid-template-columns:1.35fr .9fr;gap:18px;margin-top:18px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:520px}
+  .panel h2{margin:0;padding:14px 18px;font-size:15px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:8px}
+  .panel h2 .dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
+  .chat{padding:16px 18px;flex:1;overflow:auto;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:88%;padding:11px 14px;border-radius:14px;line-height:1.55;font-size:14.5px;white-space:pre-wrap}
+  .msg.coach{align-self:flex-start;background:#eef4f1;border:1px solid #d7e7e1;border-bottom-left-radius:5px}
+  .msg.student{align-self:flex-end;background:#fbeee9;border:1px solid #f1d4ca;border-bottom-right-radius:5px;color:#5a2720}
+  .msg .who{display:block;font-size:11px;font-weight:800;letter-spacing:.5px;margin-bottom:4px;opacity:.7}
+  .composer{padding:12px 14px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
+  .composer textarea{flex:1;resize:none;height:46px;max-height:120px;border:1px solid var(--line);
+    border-radius:11px;padding:10px 12px;font:inherit;font-size:14px;background:var(--rice-2);color:var(--ink)}
+  .composer textarea:focus{outline:2px solid var(--green-soft);background:#fff}
+  .mic{width:46px;height:46px;border-radius:50%;border:1px solid var(--green-soft);
+    background:#fff;color:var(--green);font-size:19px;cursor:pointer;flex:0 0 auto;transition:.15s}
+  .mic:hover{background:#eef4f1}
+  .mic.on{background:var(--red);color:#fff;border-color:var(--red);animation:pulse 1.1s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(181,65,47,.5)}70%{box-shadow:0 0 0 12px rgba(181,65,47,0)}100%{box-shadow:0 0 0 0 rgba(181,65,47,0)}}
+  .send{border:0;background:var(--green);color:#fff;font-weight:800;padding:0 18px;height:46px;border-radius:11px;cursor:pointer;font-size:14px}
+  .send:disabled{opacity:.45;cursor:not-allowed}
+  .hint{font-size:12px;color:var(--ink-soft);padding:0 14px 10px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;padding:0 14px 12px}
+  .chip{font-size:12.5px;border:1px solid var(--green-soft);color:var(--green);background:#fff;
+    padding:6px 11px;border-radius:999px;cursor:pointer}
+  .chip:hover{background:#eef4f1}
+  .outline{padding:16px 18px;flex:1;overflow:auto}
+  .ostep{display:flex;gap:11px;margin-bottom:14px}
+  .onum{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:var(--green);color:#fff;
+    display:grid;place-items:center;font-weight:800;font-size:13px}
+  .obody .q{font-weight:800;font-size:13px;color:var(--green)}
+  .obody .a{font-size:13.5px;color:var(--ink-soft);margin-top:3px;min-height:18px}
+  .obody .a.empty{font-style:italic;opacity:.6}
+  .final{margin-top:6px;background:#fbf6ea;border:1px dashed var(--red-soft);border-radius:12px;padding:14px 15px;display:none}
+  .final.show{display:block}
+  .final h3{margin:0 0 8px;font-size:14px;color:var(--red)}
+  .final ol{margin:0;padding-left:20px;font-size:13.5px;line-height:1.7}
+  .actions{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:10px}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:11px;padding:9px 14px;
+    font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+  .btn.primary{background:var(--red);color:#fff;border-color:var(--red)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  footer.note{margin-top:16px;font-size:12px;color:var(--ink-soft);text-align:center;line-height:1.6}
+  a{color:var(--green)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo">H</div>
+    <div class="ttl">Hermes Voice Coach<small>四点提纲语音教练 · 环节 7（交互原型）</small></div>
+    <div class="badge">原型 Demo · 可点击体验</div>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <h2><span class="dot"></span>教练对话 · Coaching Session</h2>
+      <div class="chat" id="chat"></div>
+      <div class="hint" id="hint">点击下方麦克风可用浏览器语音输入（英文），或直接打字。先讲讲你想分享的“中国故事”。</div>
+      <div class="chips" id="chips"></div>
+      <div class="composer">
+        <textarea id="input" placeholder="用英文或中文说说你的想法…"></textarea>
+        <button class="mic" id="mic" title="语音输入">🎤</button>
+        <button class="send" id="send">发送</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2><span class="dot"></span>四点提纲 · 4-Point Outline</h2>
+      <div class="outline" id="outline"></div>
+      <div class="final" id="final">
+        <h3>生成结果 · Your 4-Point Outline</h3>
+        <ol id="finalList"></ol>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="gen" disabled>生成四点提纲</button>
+        <button class="btn" id="reset">重新开始</button>
+      </div>
+    </section>
+  </div>
+
+  <footer class="note">
+    本页是《理解当代中国·英语读写教程》Unit 6 <b>Harmony Without Uniformity</b> 课时（环节 7：四点提纲语音教练）的<b>交互流程原型</b>。<br/>
+    语音输入使用浏览器内置 Speech Recognition（HTTPS 下可用），真实教学版将接入火山引擎 RTC + 豆包语音 AI 实时教练。
+  </footer>
+</div>
+
+<script>
+(function(){
+  const chat=document.getElementById('chat');
+  const input=document.getElementById('input');
+  const mic=document.getElementById('mic');
+  const send=document.getElementById('send');
+  const hint=document.getElementById('hint');
+  const chips=document.getElementById('chips');
+  const outline=document.getElementById('outline');
+  const finalBox=document.getElementById('final');
+  const finalList=document.getElementById('finalList');
+  const gen=document.getElementById('gen');
+  const reset=document.getElementById('reset');
+
+  const steps=[
+    {q:"1 · What happened?", zh:"发生了什么？",
+     coach:"Hi! I'm Hermes, your voice coach. For the China-story exchange, let's build a tight 4-point outline. First — what actually happened? Tell me the event or story you want to share.",
+     hint:"描述一个真实或构思中的文明交流事件（如张骞出使、郑和下西洋、一封外国友人的来信…）。",
+     chips:["张骞出使西域","郑和下西洋","中外学生联合项目","一项传统技艺出海"]},
+    {q:"2 · What was exchanged, and what changed?", zh:"交流了什么？带来了什么改变？",
+     coach:"Nice. Now — beyond objects, what was really exchanged (ideas, beliefs, skills)? And what changed because of it, for both sides?",
+     hint:"思考“物”之外的交流与双向的改变。",
+     chips:["技术互鉴","思想传播","生活方式改变","彼此认知更新"]},
+    {q:"3 · Which principle does it reflect?", zh:"体现了哪条原则？",
+     coach:"Good. Which of our three principles does this show most: diversity, equality, or inclusiveness? Pick one and say why.",
+     hint:"三原则：diversity（多样）/ equality（平等）/ inclusiveness（包容）。",
+     chips:["diversity 多样","equality 平等","inclusiveness 包容"]},
+    {q:"4 · What attitude or action should we take?", zh:"我们该持什么态度 / 采取什么行动？",
+     coach:"Last one — what attitude or action should we carry forward? Think of respect, modesty, openness, or cooperation.",
+     hint:"四态度：respect（尊重）/ modesty（谦逊）/ openness（开放）/ cooperation（合作）。",
+     chips:["respect 尊重","modesty 谦逊","openness 开放","cooperation 合作"]},
+  ];
+
+  let idx=0;
+  const answers=["","","",""];
+
+  function addMsg(role,text){
+    const d=document.createElement('div');
+    d.className='msg '+role;
+    const who=document.createElement('span'); who.className='who';
+    who.textContent= role==='coach'?'HERMES 教练':'YOU 学生';
+    d.appendChild(who);
+    d.appendChild(document.createTextNode(text));
+    chat.appendChild(d);
+    chat.scrollTop=chat.scrollHeight;
+    return d;
+  }
+  function renderOutline(){
+    outline.innerHTML='';
+    steps.forEach((s,i)=>{
+      const row=document.createElement('div'); row.className='ostep';
+      const num=document.createElement('div'); num.className='onum'; num.textContent=i+1;
+      const body=document.createElement('div'); body.className='obody';
+      const q=document.createElement('div'); q.className='q'; q.textContent=s.q+'  ·  '+s.zh;
+      const a=document.createElement('div'); a.className='a'+(answers[i]?'':' empty');
+      a.textContent= answers[i]? answers[i] : '（待填写）';
+      body.appendChild(q); body.appendChild(a);
+      row.appendChild(num); row.appendChild(body);
+      outline.appendChild(row);
+    });
+  }
+  function renderChips(list){
+    chips.innerHTML='';
+    list.forEach(t=>{
+      const c=document.createElement('button'); c.className='chip'; c.textContent=t;
+      c.onclick=()=>{ input.value=t; input.focus(); };
+      chips.appendChild(c);
+    });
+  }
+  function askCurrent(){
+    const s=steps[idx];
+    addMsg('coach', s.coach);
+    hint.textContent=s.hint;
+    renderChips(s.chips);
+    input.placeholder='回答：'+s.q;
+  }
+  function submit(){
+    const v=input.value.trim();
+    if(!v){ return; }
+    addMsg('student', v);
+    answers[idx]=v;
+    input.value='';
+    renderOutline();
+    if(idx<steps.length-1){
+      idx++;
+      setTimeout(askCurrent, 450);
+    } else {
+      addMsg('coach',"Excellent — that's a solid 4-point outline! Click “生成四点提纲” to see your final script skeleton.");
+      hint.textContent='四问已全部完成，可生成提纲。';
+      chips.innerHTML='';
+      gen.disabled=false;
+    }
+  }
+  function generate(){
+    const lis=[
+      'What happened — '+answers[0],
+      'What was exchanged & changed — '+answers[1],
+      'Principle reflected — '+answers[2],
+      'Attitude / action — '+answers[3],
+    ];
+    finalList.innerHTML='';
+    lis.forEach(t=>{ const li=document.createElement('li'); li.textContent=t; finalList.appendChild(li); });
+    finalBox.classList.add('show');
+    addMsg('coach',"Here is your 4-point outline. Expand each point into 2–3 sentences for a 250–300 word pitch, then record a 2–3 min short video. 你已具备参赛产出的骨架！");
+    outline.scrollTop=outline.scrollHeight;
+  }
+  function restart(){
+    idx=0; answers[0]=answers[1]=answers[2]=answers[3]='';
+    chat.innerHTML=''; finalBox.classList.remove('show'); finalList.innerHTML='';
+    gen.disabled=true; renderOutline();
+    addMsg('coach','Session restarted. Let’s build your China-story outline again.');
+    askCurrent();
+  }
+
+  // Speech recognition (browser built-in; works over HTTPS)
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  let rec=null;
+  if(SR){
+    rec=new SR(); rec.lang='en-US'; rec.interimResults=true; rec.continuous=false;
+    rec.onresult=(e)=>{
+      let txt=''; for(let i=e.resultIndex;i<e.results.length;i++) txt+=e.results[i][0].transcript;
+      input.value=txt;
+    };
+    rec.onerror=(e)=>{ console.warn('SR error',e.error); mic.classList.remove('on'); };
+    rec.onend=()=> mic.classList.remove('on');
+    mic.onclick=()=>{
+      if(mic.classList.contains('on')){ rec.stop(); return; }
+      try{ rec.start(); mic.classList.add('on'); }catch(_){}
+    };
+  } else {
+    mic.disabled=true; mic.title='当前浏览器不支持语音输入，请直接打字';
+  }
+
+  send.onclick=submit;
+  input.addEventListener('keydown',(e)=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); submit(); }});
+  gen.onclick=generate;
+  reset.onclick=restart;
+
+  // init
+  renderOutline();
+  addMsg('coach','Welcome to the Hermes Voice Coach prototype. 🌏 We’ll prepare your 2-minute China-story pitch for the 中外学生交流会 using a 4-point outline.');
+  askCurrent();
+})();
+</script>
+</body>
+</html>

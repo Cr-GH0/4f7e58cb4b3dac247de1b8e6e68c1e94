@@ -1,0 +1,37 @@
+# Local credentials and saved settings
+.env*
+!.env.example
+.dev.vars*
+!.dev.vars.example
+.hermes-settings.json*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies, generated output and local runtime data
+node_modules/
+dist/
+.next/
+.vinext/
+.wrangler/
+.vercel/
+coverage/
+*.tsbuildinfo
+*.log
+*.sqlite*
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.py[cod]
+
+# Local tools and scratch files
+.codex_tmp*/
+.tmp/
+tmp/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

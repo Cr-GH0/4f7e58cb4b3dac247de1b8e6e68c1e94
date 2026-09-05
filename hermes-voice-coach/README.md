@@ -1,0 +1,38 @@
+# Mimi
+
+支持单人单机和三人共用设备的英语语音教练。顶部用“单人｜三人小组”标签切换，语音、文字和完整记录位于同一段对话中。单人可直接开始；三人先依次登记声音，按人记录讨论，提问后只回答一次。当前根路径为真实应用，`/prototype` 跳转到根路径。完整使用方式与验证边界见[项目说明](../README.md)。
+
+## 运行
+
+1. 复制 `.env.example` 为 `.env.local`，填写火山引擎的 AK、SK、RTC AppId、AppKey，以及管理密码 `HERMES_ADMIN_PASSWORD`。
+2. 运行 `npm install`。
+3. 首次运行或更新数据库结构后执行 `npm run db:migrate`。
+4. 运行 `npm run dev`，打开 `http://localhost:3000`。
+
+AK、SK、AppKey 只保存在服务端环境变量中，绝不发送到浏览器。浏览器只接收一次性房间信息和短期 RTC Token。
+
+## 后台管理
+
+从右上角“设置”进入“后台管理”，或打开 `http://localhost:3000/admin`。当前页面有通话时，先结束语音再进入后台。管理员密码在服务端校验，登录有效期为 8 小时。
+
+- “模型与声音”：自动读取方舟对话模型、具体版本和账号的接入点，支持搜索名称；语音识别、语音合成按名称选择。声音从官方接口分页获取，按合成模型匹配，默认筛选支持英语的音色，可搜索、切换全部语言、试听官方样音。切换合成模型后重新选择与之配套的声音。
+- “更多设置”：调整回复参数、声纹匹配门槛，或手动填写尚未出现在目录中的模型。当前声纹接口没有可切换的型号；门槛同时用于服务端识别和本地归属判断。
+- “教练指令”：分别编辑日常对话和整理提纲的要求。每种指令都有使用时机、修改内容的说明和中文范例。查看范例不会更改原指令，采用范例后仍可编辑；保存后才生效。
+- 底部“撤销本次修改”回到本页载入的配置；“保存修改”保存全部变更。未保存时离开页面会提示，登录过期后重新登录保留修改。
+
+模型与声音目录由服务端使用现有 AK/SK 读取，管理员登录后自动载入，缓存 5 分钟；“刷新列表”重新查询。模型目录来自 `ListFoundationModels` / `ListFoundationModelVersions`，自定义接入点来自 `ListEndpoints`；只有 `InnerDescribeModelEndpoints` 返回运行中的模型标为“账号已开通”，其余标为“平台目录”，不声称已经获得调用权限。语音识别与合成型号使用 RTC 支持的资源映射；音色来自 `ListSpeakers`（`2025-05-20`，分页 `Limit` 使用数值），样音直接从官方地址播放。列表读取失败时保留当前配置并提供重试。
+
+配置以版本保存在 D1 中，本地数据位于忽略提交的 `.wrangler/state`。每次语音连接固定配置版本，后续更新上下文和生成提纲沿用该版本；后台保存只影响新连接。不同管理员页面同时修改时拒绝覆盖较新配置。
+
+## 接入链路
+
+- 浏览器：`@volcengine/rtc` 申请麦克风、进入 RTC 房间、收发音频、接收 `conv` 状态和 `subv` 字幕。
+- 服务端：生成 RTC Token，签名调用 `StartVoiceChat`、`UpdateVoiceChat` 与 `StopVoiceChat`（`2025-06-01`），以及 `RegisterVoicePrint`（`2024-12-01`）。
+- 智能体：豆包 ASR + LLM + TTS；应用控制回应时机并同步更正记录。单人通话已由用户确认可用，三人真人声纹效果尚待联调。
+
+官方参考：
+
+- [实时对话式 AI Web 接入](https://www.volcengine.com/docs/6348/2137641?lang=zh)
+- [StartVoiceChat](https://www.volcengine.com/docs/6348/2123348?lang=zh)
+- [StopVoiceChat](https://www.volcengine.com/docs/6348/2123349?lang=zh)
+- [官方 RTC AIGC Demo](https://github.com/volcengine/rtc-aigc-demo)
