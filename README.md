@@ -26,7 +26,7 @@
 
 主应用：[hermes-voice-coach](./hermes-voice-coach/README.md)，React / Vinext；独立版：[hermes-volc-standalone](./hermes-volc-standalone/)，Node / Cloudflare Worker。它们属于同一项目。内部目录和环境变量保留原标识，产品名称为 Mimi。
 
-本目录是 Mimi 的独立 Git 根目录。源码仓库为 [Cr-GH0/mimi-4f7e58cb4b3dac247de1b8e6e68c1e94](https://github.com/Cr-GH0/mimi-4f7e58cb4b3dac247de1b8e6e68c1e94)，后续提交和推送在本目录执行。上层教学工作区的历史没有导入此仓库。
+本目录是 Mimi 的独立 Git 根目录。源码仓库为 [Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94](https://github.com/Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94)，后续提交和推送在本目录执行。上层教学工作区的历史没有导入此仓库。
 
 两端共同使用独立版 `public` 内的模块：
 
