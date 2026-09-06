@@ -13,6 +13,7 @@ export function parseVoiceOptions(input) {
   for (const p of members) {
     if (!p || typeof p.memberId !== 'string' || !/^[A-Za-z0-9_@.-]{1,128}$/.test(p.memberId) || typeof p.name !== 'string' || [...p.name].length > 32 || /[\r\n\u0000-\u001f]/.test(p.name)) throw new Error('Invalid participant.');
     if (mode === 'group' && (typeof p.voiceprintId !== 'string' || !/^[A-Za-z0-9_@.-]{1,128}$/.test(p.voiceprintId))) throw new Error('Invalid group: register all three speakers first.');
+    if (mode === 'solo' && (p.voiceConfirmed !== true || p.voiceprintVersion !== 2 || typeof p.voiceprintId !== 'string' || !/^[A-Za-z0-9_@.-]{1,128}$/.test(p.voiceprintId))) throw new Error('Confirm your voice before starting a solo conversation.');
   }
   if (new Set(members.map(p => p.memberId)).size !== members.length || (mode === 'group' && new Set(members.map(p => p.voiceprintId)).size !== 3)) throw new Error('Invalid duplicate participants.');
   return { mode, members, context: parseContext(input?.context) };
@@ -37,7 +38,9 @@ export function buildHermesVoiceChatRequest(input, settings = DEFAULT_SETTINGS) 
     Config: {
       ASRConfig: {
         Provider: 'volcano', TurnDetectionMode: 0,
-        ProviderParams: { Mode: 'bigmodel', Credential: { ApiResourceId: settings.asr.resourceId }, StreamMode: 2, VolcanoASRParameters: JSON.stringify({request:{enable_nonstream:true}}) },
+        // The second non-streaming pass reintroduced the other voice in the
+        // live overlap probe. Keep solo ASR on the separated streaming result.
+        ProviderParams: { Mode: 'bigmodel', Credential: { ApiResourceId: settings.asr.resourceId }, StreamMode: 2, VolcanoASRParameters: JSON.stringify({request:{enable_nonstream:mode !== 'solo'}}) },
         VADConfig: { SilenceTime: 1200 },
         InterruptConfig: { InterruptKeywords: [], InterruptSpeechDuration: 0 },
       },
@@ -48,7 +51,9 @@ export function buildHermesVoiceChatRequest(input, settings = DEFAULT_SETTINGS) 
       InterruptMode: 0,
       SubtitleConfig: { DisableRTSSubtitle: false, SubtitleMode: 1 },
     },
-    AgentConfig: { TargetUserId: [input.studentUserId], UserId: input.agentUserId, WelcomeMessage: '', EnableConversationStateCallback: true, VoicePrint: mode === 'group' ? {Mode:2,IdList:members.map(p => p.voiceprintId),Score:settings.voiceprint.score} : {Mode:0} },
+    AgentConfig: { TargetUserId: [input.studentUserId], UserId: input.agentUserId, WelcomeMessage: '', EnableConversationStateCallback: true, VoicePrint: mode === 'solo'
+      ? {Mode:1,IdList:[members[0].voiceprintId],EnableSV:true,Score:settings.voiceprint.score,ProcessMode:2,SVMode:2}
+      : mode === 'group' ? {Mode:2,IdList:members.map(p => p.voiceprintId),Score:settings.voiceprint.score} : {Mode:0} },
   };
 }
 

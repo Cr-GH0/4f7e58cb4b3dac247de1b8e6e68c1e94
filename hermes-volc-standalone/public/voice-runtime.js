@@ -1,5 +1,7 @@
 import { WORKSPACE_KEY, newWorkspace, newConversation, readWorkspace, participants, personName, updatePerson, replacePerson, receiveSubtitle, responseDecision, conversationContext, extractIntroducedName, correctAttribution, correctText, addText, saveDraft } from './conversation.js';
 import { recordVoiceSample } from './voice-enrollment.js';
+import { reduceSubtitle } from './group-session.js';
+import { hasConfirmedVoice, acceptSoloSubtitle, approveSoloRound } from './solo-voice.js';
 
 export function parseTlv(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -41,7 +43,7 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
   try { workspace = readWorkspace(storage); } catch (error) { workspace = newWorkspace(); storageError = readableError(error); }
   let state = { phase:'idle', muted:false, engagement:null, enrollmentId:null, recording:false, seconds:0, error:storageError, storageError, saved:!storageError, autoplayBlocked:false, voiceStatus:'', activeSpeaker:null, contextStatus:'', pendingOutline:null, microphones:[], microphoneId:workspace.microphoneId ?? '', captureDeviceId:'', inputLevel:0, hasInput:false, connectionStep:'' };
   let connection = null, startup = null, epoch = 0, replyEpoch = 0, queue = Promise.resolve(), recorder = null, responseTimer = null;
-  let targetPersonId = null, draftTarget = null;
+  let targetPersonId = null, draftTarget = null, pendingSample = null, queuedRequest = null;
   const listeners = new Set();
   const current = () => workspace.conversations.find(c => c.id === workspace.currentId);
   const notify = kind => listeners.forEach(fn => fn(kind));
@@ -58,6 +60,11 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     persist(); notify();
   };
   const report = error => setState({error:readableError(error)});
+  function discardSample() {
+    pendingSample = null;
+    if (state.sampleUrl) URL.revokeObjectURL(state.sampleUrl);
+    state = {...state,sampleUrl:'',intro:''};
+  }
   async function verifyCapture(ctx, requested, settings) {
     let track = ctx.engine.getLocalStreamTrack?.(0,'audio');
     const actual = capturedMicrophone(state.microphones,settings,track);
@@ -101,6 +108,7 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     if (!ctx || ctx.released) return;
     ctx.released = true;
     clearTimeout(ctx.readyTimer); clearTimeout(ctx.expiryTimer);
+    clearTimeout(ctx.introTimer); ctx.finishIntro?.(); ctx.collecting = false;
     if (ctx.engine) {
       await ctx.engine.stopAudioCapture().catch(() => {});
       await ctx.engine.leaveRoom(false).catch(() => {});
@@ -112,9 +120,10 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
       catch (error) { report(new Error(`Your microphone is off, but the server has not confirmed the call ended: ${readableError(error)}`)); }
     }
   }
-  async function stop() {
+  async function stop({preserveRequest = false} = {}) {
+    if (!preserveRequest) queuedRequest = null;
     if (state.phase === 'idle' && !startup) return;
-    ++epoch; clearResponse(); recorder?.abort(); recorder = null;
+    ++epoch; clearResponse(); recorder?.abort(); recorder = null; discardSample();
     const ctx = connection;
     setState({phase:'ending',recording:false,engagement:null});
     ctx?.cancelReady?.();
@@ -125,7 +134,7 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     await queue.catch(() => {});
     await release(ctx);
     if (connection === ctx) connection = null;
-    setState({phase:'idle',muted:false,enrollmentId:null,activeSpeaker:null,contextStatus:'',inputLevel:0,connectionStep:''});
+    setState({phase:'idle',muted:false,enrollmentId:null,activeSpeaker:null,contextStatus:'',inputLevel:0,connectionStep:'',voiceStatus:'',voiceProtection:'off'});
   }
   function enqueue(action, buildBody, generation = replyEpoch) {
     const ctx = connection;
@@ -149,6 +158,7 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
   }
   async function respond(text, personId, outline = false) {
     if (!connection?.ready || state.enrollmentId || state.phase === 'ending') return;
+    if (current().mode === 'solo' && (!connection.voiceActive || !hasConfirmedVoice(participants(current())[0],connection.mic))) return;
     clearResponse();
     const generation = replyEpoch;
     targetPersonId = personId; draftTarget = outline ? personId : null;
@@ -162,15 +172,30 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
       if (done && ['thinking','speaking'].includes(state.phase)) responseTimer = setTimeout(() => { clearResponse(); setState({phase:'listening',error:'No complete reply received. Try asking again. Your transcript is still here.'}); },45000);
     } catch (error) { if (generation === replyEpoch) { clearResponse(); setState({phase:'listening'}); report(error); } }
   }
-  function subtitle(ctx, data) {
+  function subtitle(ctx, data, approved = false) {
     if (ctx !== connection || ctx.released || state.phase === 'ending') return;
     if (data.userId !== ctx.session.botUserId && data.userId !== ctx.session.userId) return;
     if (ctx.enrollment) {
-      if (!state.recording || data.userId === ctx.session.botUserId) return;
+      if (data.userId === ctx.session.botUserId) return;
+      if (current().mode === 'solo') {
+        if (!ctx.collecting) return;
+        ctx.enrollmentLines = reduceSubtitle(ctx.enrollmentLines,data,{...ctx.session,members:participants(current()),enrollmentPersonId:state.enrollmentId});
+        setState({intro:ctx.enrollmentLines.map(line=>line.text).join(' ')});
+        if (!state.recording && ctx.enrollmentLines.length && ctx.enrollmentLines.every(line=>line.paragraph)) ctx.finishIntro?.();
+        return;
+      }
+      if (!state.recording) return;
       ctx.intro = data.text || ctx.intro;
       const name = extractIntroducedName(ctx.intro);
       if (name && !current().people.find(p => p.memberId === state.enrollmentId)?.name) change(c => updatePerson(c,state.enrollmentId,{name}));
       setState({intro:ctx.intro}); return;
+    }
+    if (current().mode === 'solo') {
+      if (!ctx.voiceActive || !ctx.ready) return;
+      if (data.userId !== ctx.session.botUserId && !approved) {
+        data = acceptSoloSubtitle(ctx.soloPending,data,participants(current())[0],ctx.session.voiceprintScore ?? 50);
+        if (!data) return;
+      }
     }
     const round = Number.isInteger(data.roundId) ? data.roundId : null;
     if (data.userId !== ctx.session.botUserId && round !== null && ctx.studentRound !== null && round < ctx.studentRound) return;
@@ -209,7 +234,7 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     if (state.phase !== 'idle' || startup) return;
     if (storageError) { report(storageError); return; }
     const ticket = ++epoch;
-    const ctx = {session:null,engine:null,VERTC:null,released:false,startAttempted:false,ready:false,handled:new Set(),enrollment:false,mic:'',intro:'',lastRound:0,studentRound:null,replyAfterRound:Infinity,replyRound:null};
+    const ctx = {session:null,engine:null,VERTC:null,released:false,startAttempted:false,ready:false,handled:new Set(),enrollment:false,mic:'',intro:'',lastRound:0,studentRound:null,replyAfterRound:Infinity,replyRound:null,voiceActive:false,soloPending:new Map(),enrollmentLines:[],collecting:false};
     connection = ctx;
     const check = () => { if (ticket !== epoch) throw new DOMException('Cancelled','AbortError'); };
     const step = async (promise, message) => {
@@ -257,9 +282,10 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
       readyPromise.catch(()=>{});
       ctx.cancelReady = ()=>readyReject(new DOMException('Cancelled','AbortError'));
       const ready = () => {
-        if (ctx !== connection || ticket !== epoch || !ctx.started || !ctx.joined) return;
+        if (ctx !== connection || ticket !== epoch || !ctx.started || !ctx.joined || ctx.ready) return;
+        if (current().mode === 'solo' && !ctx.enrollment && !ctx.voiceActive) { setState({connectionStep:'Checking your voice',voiceProtection:'loading'}); return; }
         ctx.ready = true; clearTimeout(ctx.readyTimer);
-        const next = participants(current()).find(p => !p.voiceprintId || p.deviceId !== ctx.mic);
+        const next = participants(current()).find(p => current().mode === 'solo' ? !hasConfirmedVoice(p,ctx.mic) : !p.voiceprintId || p.deviceId !== ctx.mic);
         setState({phase:ctx.enrollment ? 'enrolling' : 'listening',enrollmentId:ctx.enrollment ? next?.memberId : null,engagement:current().mode === 'solo' ? 'next' : null});
         readyResolve();
       };
@@ -274,7 +300,11 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
             const code = payload.Stage?.Code;
             const round = payload.RoundID;
             if (Number.isInteger(round)) ctx.lastRound = Math.max(ctx.lastRound,round);
-            if (code === 1 && Number.isInteger(round) && (ctx.studentRound === null || round > ctx.studentRound)) {
+            if (code === 2 && current().mode === 'solo' && ctx.voiceActive && payload.TaskId === ctx.session.taskId && payload.UserID === ctx.session.userId) {
+              const accepted=approveSoloRound(ctx.soloPending,round,participants(current())[0]);
+              if (accepted) subtitle(ctx,accepted,true);
+            }
+            if (code === 1 && current().mode !== 'solo' && Number.isInteger(round) && (ctx.studentRound === null || round > ctx.studentRound)) {
               ctx.studentRound = round; clearResponse(); setState({phase:'listening'});
             }
             if (code === 3 && Number.isInteger(round) && round > ctx.replyAfterRound && (ctx.replyRound === null || ctx.replyRound === round)) {
@@ -282,12 +312,25 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
             }
             if ([4,5].includes(code) && round === ctx.replyRound) setState({phase:'listening'});
           }
-          if (type === 'stat' && payload.event === 'VoicePrintStatus') setState({voiceStatus:payload.status === 'Active' ? 'Speaker recognition is on' : 'Speaker recognition is not ready. Contributions will be marked Unassigned.'});
+          // VoiceReject may contain the rejected words, but has no round ID.
+          // Never turn it into a subtitle, command, correction, or reply.
+          if (type === 'stat' && payload.event === 'VoiceReject') return;
+          if (type === 'stat' && payload.event === 'VoicePrintStatus') {
+            if (current().mode === 'solo' && !ctx.enrollment) {
+              ctx.voiceActive = payload.status === 'Active';
+              setState({voiceProtection:ctx.voiceActive ? 'active' : 'loading',voiceStatus:ctx.voiceActive ? 'Your voice is connected' : 'Checking your voice'});
+              if (ctx.voiceActive) ready();
+              else if (['Failed','Disabled'].includes(payload.status) || ctx.ready) {
+                clearResponse(); report(new Error('Voice protection is unavailable. The call has stopped. Reconnect to try again.'));
+                void stop();
+              }
+            } else setState({voiceStatus:payload.status === 'Active' ? 'Speaker recognition is on' : 'Speaker recognition is not ready. Contributions will be marked Unassigned.'});
+          }
         } catch { report(new Error('A voice message could not be read. Check the transcript.')); }
       });
       // Show real input levels while connecting, including when the room fails.
       await step(startCapture(ctx),'Could not capture audio. Check the microphone.'); check();
-      ctx.enrollment = current().mode === 'group' && people.some(p => !p.voiceprintId || p.deviceId !== ctx.mic);
+      ctx.enrollment = people.some(p => current().mode === 'solo' ? !hasConfirmedVoice(p,ctx.mic) : !p.voiceprintId || p.deviceId !== ctx.mic);
       setState({captureDeviceId:ctx.mic,connectionStep:'Connecting voice',voiceStatus:!ctx.enrollment && current().mode === 'group' ? 'Loading speaker recognition' : ''});
       await step(ctx.engine.joinRoom(ctx.session.rtcToken,ctx.session.roomId,{userId:ctx.session.userId,extraInfo:JSON.stringify({call_scene:'RTC-AIGC'})},{isAutoPublish:false,isAutoSubscribeAudio:true,roomProfileType:rtc.RoomProfileType.chat}),'This browser could not connect voice. Open this page in Edge or Chrome and try again.'); check();
       await step(ctx.engine.publishStream(rtc.MediaType.AUDIO),'Audio could not connect. Try again.'); check();
@@ -304,17 +347,44 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     try { await startup; }
     catch (error) { await release(ctx); if (ticket === epoch) {connection = null; setState({phase:'idle',inputLevel:0,connectionStep:''}); report(error);} }
     finally { startup = null; }
+    if (ticket === epoch && ctx.ready && ctx.enrollment && current().mode === 'solo') void enroll();
+    if (ticket === epoch && ctx.ready && ctx.voiceActive && queuedRequest?.conversationId === current().id) {
+      const request = queuedRequest; queuedRequest = null;
+      await respond(request.text,request.personId,request.outline);
+    }
   }
   async function enroll() {
     const ctx = connection, personId = state.enrollmentId;
     if (!ctx?.ready || !personId || recorder || state.recording) return;
+    // A retry gets a new ASR task: late subtitles from a rejected recording must
+    // never be attached to the next recording or shown for its confirmation.
+    if (current().mode === 'solo' && ctx.sampleAttempted) { await stop({preserveRequest:true}); await start(); return; }
+    ctx.sampleAttempted = true;
     recorder = new AbortController(); const control = recorder; const ticket = epoch;
+    discardSample(); ctx.enrollmentLines = []; ctx.collecting = current().mode === 'solo';
     setState({recording:true,seconds:0,intro:'',error:''});
     try {
       await startCapture(ctx);
-      const sample = await record({deviceId:ctx.mic,signal:control.signal,onProgress:seconds=>setState({seconds})});
+      const sample = await record({deviceId:ctx.mic,track:current().mode === 'solo' ? ctx.engine.getLocalStreamTrack?.(0,'audio') : undefined,signal:control.signal,onProgress:seconds=>setState({seconds})});
       await ctx.engine.stopAudioCapture();
       if (control.signal.aborted || ticket !== epoch) return;
+      if (current().mode === 'solo') {
+        setState({recording:false,phase:'transcribing-voice'});
+        if (!ctx.enrollmentLines.length || !ctx.enrollmentLines.every(line=>line.paragraph)) {
+          await new Promise(resolve => { ctx.finishIntro=resolve; ctx.introTimer=setTimeout(resolve,3000); });
+          clearTimeout(ctx.introTimer); ctx.finishIntro=null;
+        }
+        ctx.collecting = false;
+        if (control.signal.aborted || ticket !== epoch) return;
+        const text = ctx.enrollmentLines.map(line=>line.text).join(' ').trim();
+        if (!text || !ctx.enrollmentLines.every(line=>line.paragraph)) throw new Error('I could not catch a complete introduction. Say a few sentences, then pause before the recording ends.');
+        if (sample.deviceId !== ctx.mic) throw new Error('The microphone changed. Please record your voice again.');
+        pendingSample = Object.freeze({...sample,text,personId,epoch:ticket});
+        const bytes = Uint8Array.from(atob(sample.audio),c=>c.charCodeAt(0));
+        const sampleUrl = URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+        setState({phase:'review-voice',intro:text,sampleUrl});
+        return;
+      }
       setState({phase:'registering'});
       const result = await post('/api/voiceprint/register',{name:personId.slice(-32),audio:sample.audio});
       if (control.signal.aborted || ticket !== epoch) return;
@@ -323,10 +393,26 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
       const next = participants(current()).find(p => !p.voiceprintId || p.deviceId !== ctx.mic);
       setState({enrollmentId:next?.memberId ?? null,phase:'enrolling',recording:false,intro:'',seconds:0});
       if (!next) { recorder = null; await stop(); await start(); }
-    } catch (error) { if (ticket === epoch && !control.signal.aborted) { setState({phase:'enrolling'}); report(error); } }
+    } catch (error) { ctx.collecting=false; if (ticket === epoch && !control.signal.aborted) { setState({phase:'enrolling'}); report(error); } }
     finally { if (ticket === epoch) { await ctx.engine?.stopAudioCapture().catch(()=>{}); setState({recording:false}); } if (recorder === control) recorder = null; }
   }
-  async function cancelEnrollment() { recorder?.abort(); await connection?.engine?.stopAudioCapture(); setState({recording:false,phase:'enrolling',seconds:0}); }
+  async function confirmVoice() {
+    const sample = pendingSample, ctx = connection;
+    if (state.phase !== 'review-voice' || !sample || !ctx?.ready || sample.epoch !== epoch || sample.personId !== state.enrollmentId) return;
+    setState({phase:'registering',error:''});
+    try {
+      const result = await post('/api/voiceprint/register',{name:sample.personId.slice(-32),audio:sample.audio});
+      if (sample !== pendingSample || sample.epoch !== epoch || ctx !== connection) return;
+      if (!result.voiceprintId) throw new Error('Voice registration returned no result. Try again.');
+      change(c=>updatePerson(c,sample.personId,{voiceprintId:result.voiceprintId,deviceId:sample.deviceId,voiceConfirmed:true,voiceprintVersion:2}));
+      discardSample(); await stop({preserveRequest:true}); await start();
+    } catch (error) { if (sample === pendingSample && sample.epoch === epoch) { setState({phase:'review-voice'}); report(error); } }
+  }
+  async function cancelEnrollment() {
+    if (current().mode === 'solo') { await stop(); return; }
+    recorder?.abort(); connection?.finishIntro?.(); if (connection) connection.collecting=false;
+    discardSample(); await connection?.engine?.stopAudioCapture(); setState({recording:false,phase:'enrolling',seconds:0});
+  }
   async function syncCorrection() {
     if (!connection?.ready || connection.enrollment) return;
     await interrupt();
@@ -336,19 +422,15 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
   }
   return {
     getSnapshot:()=>({workspace,conversation:current(),state}), subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},
-    start, stop, enroll, cancelEnrollment, listenOnly, interrupt, report,
+    start, stop, enroll, cancelEnrollment, confirmVoice, listenOnly, interrupt, report,
+    async retryVoice() { await stop({preserveRequest:true}); await start(); },
     async ask() { if (state.muted) await this.toggleMute(); setState({engagement:'next'}); },
     async toggleMute() { if (!connection?.ready || connection.enrollment) return; if (state.muted) await startCapture(connection); else await connection.engine.stopAudioCapture(); setState({muted:!state.muted,inputLevel:0}); },
     async selectMicrophone(id) {
       const selected = chooseMicrophone(state.microphones,id);
       if (!state.microphones.some(d=>d.deviceId===id) || !selected) return;
       const ctx = connection;
-      if (ctx?.ready && current().mode === 'solo') {
-        await ctx.engine.setAudioCaptureDevice(selected.deviceId);
-        if (state.muted) { ctx.mic = selected.deviceId; }
-        else { const track = ctx.engine.getLocalStreamTrack(0,'audio'); await verifyCapture(ctx,selected.deviceId,track?.getSettings()); }
-      }
-      else if (ctx) await stop();
+      if (ctx) await stop();
       workspace = {...workspace,microphoneId:id}; persist();
       setState({microphoneId:id,captureDeviceId:ctx?.mic ?? '',inputLevel:0,hasInput:false});
     },
@@ -356,10 +438,10 @@ export function createVoiceRuntime({ loadRtc, storage = globalThis.localStorage,
     async selectConversation(id) { if (!workspace.conversations.some(c=>c.id===id)) return; await stop(); workspace = {...workspace,currentId:id}; persist(); notify(); },
     async rename(id,name) { if ([...name.trim()].length > 32) throw new Error('Use a name of up to 32 characters.'); change(c=>updatePerson(c,id,{name:name.trim()})); await syncCorrection(); },
     async replace(id) { await stop(); change(c=>replacePerson(c,id)); },
-    async reregister(id) { await stop(); change(c=>updatePerson(c,id,{voiceprintId:'',deviceId:''})); await start(); },
+    async reregister(id) { await stop(); change(c=>updatePerson(c,id,{voiceprintId:'',deviceId:'',voiceConfirmed:false,voiceprintVersion:null})); await start(); },
     async correct(key,personId,text) { change(c=>correctText(correctAttribution(c,key,personId),key,text)); await syncCorrection(); },
-    async sendText(text,personId) { if (!text.trim()) return; if (current().mode === 'group') setState({engagement:null}); change(c=>addText(c,text,personId)); if (!connection?.ready) await start(); await respond(text,personId); },
-    async outline(personId) { if (!current().lines.some(l=>l.role==='student' && l.speakerId===personId && l.paragraph)) throw new Error('No contributions from this person yet.'); if (!connection?.ready) await start(); await respond('',personId,true); },
+    async sendText(text,personId) { if (!text.trim()) return; if (current().mode === 'group') setState({engagement:null}); change(c=>addText(c,text,personId)); if (!connection?.ready) await start(); if (current().mode === 'solo' && connection?.enrollment) {queuedRequest={conversationId:current().id,text,personId,outline:false};return;} await respond(text,personId); },
+    async outline(personId) { if (!current().lines.some(l=>l.role==='student' && l.speakerId===personId && l.paragraph)) throw new Error('No contributions from this person yet.'); if (!connection?.ready) await start(); if (current().mode === 'solo' && connection?.enrollment) {queuedRequest={conversationId:current().id,text:'',personId,outline:true};return;} await respond('',personId,true); },
     saveOutline(personId,text,status) { if (!text.trim()) throw new Error('The outline cannot be empty.'); change(c=>saveDraft(c,personId,text.trim(),status)); },
     async enableSound() { if (!connection?.ready) return; try { await connection.engine.play(connection.session.botUserId); setState({autoplayBlocked:false}); } catch (error) { setState({autoplayBlocked:true}); report(error); } },
     pagehide() { recorder?.abort(); if (connection?.session) navigator.sendBeacon('/api/voicechat/stop',new Blob([JSON.stringify(connection.session)],{type:'application/json'})); void stop(); },

@@ -19,8 +19,8 @@ export function encodeWav(samples, sampleRate) {
   return new Uint8Array(buffer);
 }
 
-/** @param {{deviceId?:string,onProgress:(seconds:number)=>void,signal:AbortSignal}} options */
-export async function recordVoiceSample({ deviceId, onProgress, signal }) {
+/** @param {{deviceId?:string,track?:MediaStreamTrack,onProgress:(seconds:number)=>void,signal:AbortSignal}} options */
+export async function recordVoiceSample({ deviceId, track, onProgress, signal }) {
   if (!globalThis.isSecureContext || !navigator.mediaDevices) throw new Error("Recording requires HTTPS or localhost.");
   const context = new AudioContext();
   let stream, processor, source, timer;
@@ -28,7 +28,9 @@ export async function recordVoiceSample({ deviceId, onProgress, signal }) {
   try {
     checkAbort();
     await context.resume();
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+    // Solo registration records the same microphone track that supplies the ASR.
+    // Clone it so stopping the recorder cannot end the RTC track.
+    stream = track ? new MediaStream([track.clone()]) : await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
     checkAbort();
     const actualDeviceId = stream.getAudioTracks()[0].getSettings().deviceId;
     if (!actualDeviceId) throw new Error("Could not identify the microphone. Select the device again.");

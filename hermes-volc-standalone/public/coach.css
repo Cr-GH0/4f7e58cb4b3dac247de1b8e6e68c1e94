@@ -251,4 +251,9 @@ p { line-height: 1.65; }
   .message p { font-size: 19px; }
   .welcome-view .conversation-bottom { padding-top: 36px; }
 }
+.solo-enrollment { max-width: 580px; }
+.voice-confirm-text { margin: 24px 0; padding: 18px 22px; border-left: 3px solid #bb4a39; background: #f7f3ed; text-align: left; font-size: 18px; line-height: 1.65; overflow-wrap: anywhere; }
+.solo-enrollment audio { width: 100%; margin: 0 0 16px; }
+.voice-confirm-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.voice-confirm-actions button { min-height: 48px; padding: 12px 20px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

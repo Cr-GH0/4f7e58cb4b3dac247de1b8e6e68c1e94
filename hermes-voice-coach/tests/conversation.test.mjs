@@ -6,7 +6,8 @@ import { createVoiceRuntime, chooseMicrophone, capturedMicrophone } from '../../
 import { buildHermesVoiceChatRequest, buildVoiceUpdates } from '../../hermes-volc-standalone/public/voice-chat-config.js';
 import { handleRequest } from '../../hermes-volc-standalone/worker.js';
 import { createInputDrafts } from '../../hermes-volc-standalone/public/input-drafts.js';
-import { peopleForReview } from '../../hermes-volc-standalone/public/coach-view.js';
+import { peopleForReview, renderSoloEnrollment } from '../../hermes-volc-standalone/public/coach-view.js';
+import { hasConfirmedVoice, acceptSoloSubtitle, approveSoloRound } from '../../hermes-volc-standalone/public/solo-voice.js';
 import { testDatabase } from './admin-fixture.mjs';
 import { signTicket } from '../../hermes-volc-standalone/admin-security.js';
 
@@ -87,6 +88,12 @@ function packet(type,payload) {const text=new TextEncoder().encode(JSON.stringif
 function fixture(options = {}) {
   const calls=[],engines=[]; let count=0;
   const storage=options.storage ?? memory();
+  // Turn-taking tests begin with a previously click-confirmed owner. Enrollment
+  // tests explicitly start without this saved voice and exercise the real gate.
+  if (!options.storage && options.withVoice !== false) {
+    let c=newConversation(); c=updatePerson(c,c.participantIds[0],{voiceprintId:options.voiceprintId ?? 'owner_voice',voiceConfirmed:true,voiceprintVersion:2,deviceId:options.devices ? 'physical' : 'mic'});
+    storage.setItem('hermes.conversations.v2',JSON.stringify({version:2,currentId:c.id,conversations:[c]}));
+  }
   const events=Object.fromEntries(['onError','onAutoplayFailed','onUserJoined','onUserLeave','onRoomBinaryMessageReceived','onLocalAudioPropertiesReport','onTrackEnded'].map(k=>[k,k]));
   const devices=options.devices ?? [{kind:'audioinput',deviceId:'mic',label:'Microphone'}];
   const rtc={RoomProfileType:{chat:0},MediaType:{AUDIO:1},default:{
@@ -111,14 +118,21 @@ function fixture(options = {}) {
   const fetchFn=async(url,init)=>{
     const body=JSON.parse(init.body);calls.push({url,body});
     if(url==='/api/session'){count++;session={appId:'app',roomId:`r${count}`,userId:`u${count}`,botUserId:`b${count}`,taskId:`t${count}`,rtcToken:'test',expiresAt:Math.floor(Date.now()/1000)+600};return Response.json(session);}
-    if(url==='/api/voicechat/start'){if(options.delayStart)await options.delayStart;engines.at(-1).emit(events.onUserJoined,{userInfo:{userId:session.botUserId}});}
+    if(url==='/api/voicechat/start'){if(options.delayStart)await options.delayStart;engines.at(-1).emit(events.onUserJoined,{userInfo:{userId:session.botUserId}});if(body.mode==='solo' && options.activeStatus!==false)engines.at(-1).emit(events.onRoomBinaryMessageReceived,{userId:session.botUserId,message:packet('stat',{event:'VoicePrintStatus',status:'Active'})});}
     if(url==='/api/voiceprint/register')return Response.json({voiceprintId:`vp_${body.name}`});
     if(options.failUpdate && url==='/api/voicechat/update')return Response.json({error:'TestError: unavailable'},{status:502});
     return Response.json({ok:true});
   };
   const runtime=createVoiceRuntime({storage,fetchFn,loadRtc:async()=>rtc,record:options.record ?? (async({onProgress})=>{onProgress(20);return {audio:'test',deviceId:'mic'};})});
-  const emit=(text,extra={})=>engines.at(-1).emit(events.onRoomBinaryMessageReceived,{userId:session.botUserId,message:packet('subv',{data:[{userId:session.userId,roundId:1,sequence:0,text,paragraph:true,...extra}]})});
-  return {runtime,calls,emit,storage,engines,session:()=>session};
+  const event=(type,value,userId=session.botUserId)=>engines.at(-1).emit(events.onRoomBinaryMessageReceived,{userId,message:packet(type,value)});
+  const think=(roundId=1,extra={},sender)=>event('conv',{Stage:{Code:2,Description:'thinking'},RoundID:roundId,TaskId:session.taskId,UserID:session.userId,...extra},sender);
+  const emit=(text,extra={})=>{
+    const data={userId:session.userId,roundId:1,sequence:0,text,paragraph:true,...(options.autoIdentity===true || (options.autoIdentity!==false && runtime.getSnapshot().conversation.mode==='group') ? {voiceprintId:participants(runtime.getSnapshot().conversation)[0]?.voiceprintId,voiceprintScore:75} : {}),...extra};
+    event('subv',{data:[data]});
+    if(options.autoApproval!==false && data.paragraph && data.userId===session.userId && runtime.getSnapshot().conversation.mode==='solo')think(data.roundId);
+  };
+  const status=value=>engines.at(-1).emit(events.onRoomBinaryMessageReceived,{userId:session.botUserId,message:packet('stat',{event:'VoicePrintStatus',status:value})});
+  return {runtime,calls,emit,status,think,event,storage,engines,session:()=>session};
 }
 
 const microphones = [
@@ -136,8 +150,8 @@ test('capture uses the actual default microphone even when a virtual input is li
   assert.equal(f.runtime.getSnapshot().state.captureDeviceId,'physical');
   assert.equal(f.engines[0].getLocalStreamTrack().getSettings().deviceId,'physical');
   assert(f.calls.findIndex(c=>c.capture==='on') < f.calls.findIndex(c=>c.joined));
-  await f.runtime.selectMicrophone('virtual');await f.runtime.toggleMute();await f.runtime.toggleMute();
-  assert.equal(f.calls.filter(c=>c.capture==='on').at(-1).deviceId,'virtual');
+  await f.runtime.selectMicrophone('virtual');
+  assert.equal(f.runtime.getSnapshot().state.phase,'idle');
   await f.runtime.stop();await f.runtime.start();
   assert.equal(f.calls.filter(c=>c.capture==='on').at(-1).deviceId,'virtual');await f.runtime.stop();
 });
@@ -184,10 +198,14 @@ test('resuming sound uses the RTC player and preserves a failed playback prompt'
   assert.equal(f.calls.filter(c=>c.play).at(-1).play,f.session().botUserId);
   assert.equal(f.runtime.getSnapshot().state.autoplayBlocked,false);await f.runtime.stop();
 });
-test('solo bypasses enrollment; group waits for all three registrations',()=>{
+test('solo requires a click-confirmed voice and enables separation plus verification; group retains recognition',()=>{
   const solo=newConversation();const group=newConversation('group');
-  const request=buildHermesVoiceChatRequest({mode:'solo',members:participants(solo)});
-  assert.deepEqual(request.AgentConfig.VoicePrint,{Mode:0});assert.equal(request.Config.ASRConfig.TurnDetectionMode,0);
+  assert.throws(()=>buildHermesVoiceChatRequest({mode:'solo',members:participants(solo)}),/Confirm your voice/);
+  const owner={...participants(solo)[0],voiceConfirmed:true,voiceprintVersion:2,voiceprintId:'mine'};
+  const request=buildHermesVoiceChatRequest({mode:'solo',members:[owner]});
+  assert.deepEqual(request.AgentConfig.VoicePrint,{Mode:1,IdList:['mine'],EnableSV:true,Score:50,ProcessMode:2,SVMode:2});assert.equal(request.Config.ASRConfig.TurnDetectionMode,0);
+  assert.equal(request.Config.LLMConfig.AutoActive,true);
+  assert.equal(JSON.parse(request.Config.ASRConfig.ProviderParams.VolcanoASRParameters).request.enable_nonstream,false);
   assert.equal(request.Config.LLMConfig.AutoActive,true);
   assert.equal(buildHermesVoiceChatRequest({mode:'enrollment',members:participants(group)}).Config.LLMConfig.AutoActive,false);
   assert.throws(()=>buildHermesVoiceChatRequest({mode:'group',members:participants(group)}),/register/);
@@ -214,8 +232,8 @@ test('corrections survive late ASR and invalidate affected outlines',()=>{
   const context=JSON.parse(conversationContext(c));assert.equal(context.records[0].personId,b);assert.equal(context.records[0].text,'Correct meaning.');
 });
 test('manual ASR segments in one round are preserved and deduplicated',()=>{
-  let c=newConversation(); const session={taskId:'t',botUserId:'bot'};
-  const speech=(sequence,text,paragraph)=>({userId:'u',roundId:1,sequence,text,paragraph});
+  let c=newConversation(); c=updatePerson(c,c.participantIds[0],{voiceprintId:'owner'}); const session={taskId:'t',botUserId:'bot'};
+  const speech=(sequence,text,paragraph)=>({userId:'u',roundId:1,sequence,text,paragraph,verifiedVoiceprintId:'owner',voiceVerification:'volcengine-mode1',voiceVerified:true});
   for(const data of [speech(0,'First',false),speech(1,'First.',true),speech(2,'Second',false),speech(3,'Second.',true),speech(3,'Second.',true)])c=receiveSubtitle(c,data,session);
   assert.deepEqual(c.lines.map(l=>l.text),['First.','Second.']);assert(c.lines.every(l=>l.speakerId===c.participantIds[0]));
 });
@@ -349,4 +367,209 @@ test('standalone Worker tokens use the official length-prefixed base64 envelope 
   assert.equal(sigLength,32);assert.equal(signature.length,32);assert.deepEqual(signature,createHmac('sha256','test-key').update(message).digest());
   const roomLength=message.readUInt16LE(12);assert.equal(message.subarray(14,14+roomLength).toString(),session.roomId);
   assert.equal(message.readUInt32LE(8),session.expiresAt);
+});
+
+test('solo enrollment waits for a click, registers precisely the reviewed sample, and then enables protection',async()=>{
+  let f;
+  const audio=Buffer.from('the reviewed recording').toString('base64');
+  f=fixture({withVoice:false,record:async({deviceId,track,onProgress})=>{
+    assert.equal(track.getSettings().deviceId,deviceId); onProgress(20);
+    f.emit('My name is Lin. I would like to discuss tea.');
+    return {audio,deviceId};
+  }});
+  await f.runtime.start(); await tick();
+  assert.equal(f.runtime.getSnapshot().state.phase,'review-voice');
+  assert.match(f.runtime.getSnapshot().state.intro,/My name is Lin/);
+  assert.equal(f.calls.filter(c=>c.url==='/api/voiceprint/register').length,0);
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  f.emit('Yes, that was me.',{roundId:2}); await tick();
+  assert.equal(f.runtime.getSnapshot().state.phase,'review-voice');
+  assert.equal(f.calls.filter(c=>c.url==='/api/voiceprint/register').length,0);
+  await Promise.all([f.runtime.confirmVoice(),f.runtime.confirmVoice()]);
+  assert.equal(f.calls.filter(c=>c.url==='/api/voiceprint/register').length,1);
+  assert.equal(f.calls.find(c=>c.url==='/api/voiceprint/register').body.audio,audio);
+  assert.equal(f.runtime.getSnapshot().state.phase,'listening');
+  assert.equal(f.runtime.getSnapshot().state.voiceProtection,'active');
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  assert(hasConfirmedVoice(participants(f.runtime.getSnapshot().conversation)[0],'mic'));
+  f.emit('Now I am ready to talk.',{roundId:3}); await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,1);
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  await f.runtime.stop();
+});
+
+test('rejecting a recording discards its words and audio; only the next clicked sample is registered',async()=>{
+  let f,n=0;
+  f=fixture({withVoice:false,record:async({deviceId})=>{ n++; f.emit(n===1 ? 'Someone else is speaking.' : 'These are my own words.',{roundId:n}); return {deviceId,audio:Buffer.from(`sample${n}`).toString('base64')}; }});
+  await f.runtime.start(); await tick(); await f.runtime.cancelEnrollment();
+  await f.runtime.confirmVoice();
+  assert.equal(f.calls.some(c=>c.url==='/api/voiceprint/register'),false);
+  assert.equal(f.runtime.getSnapshot().state.sampleUrl,'');
+  await f.runtime.start(); await tick(); await f.runtime.confirmVoice();
+  assert.equal(Buffer.from(f.calls.find(c=>c.url==='/api/voiceprint/register').body.audio,'base64').toString(),'sample2');
+  assert(!JSON.stringify(f.runtime.getSnapshot().workspace).includes('Someone else'));
+  await f.runtime.stop();
+});
+
+test('unmatched speech cannot write records, ask Mimi, pause replies, or interrupt the current reply',async()=>{
+  const f=fixture({autoIdentity:false}); await f.runtime.start();
+  f.emit('My question.',{voiceprintId:'owner_voice',voiceprintScore:80}); await tick();
+  f.emit('Mimi, answer my question.',{roundId:2,voiceprintId:'neighbour',voiceprintScore:99});
+  f.emit('Just listen.',{roundId:3,voiceprintId:'owner_voice',voiceprintScore:10});
+  f.event('stat',{event:'VoiceReject',reason:'VoicePrintNotMatch',text:'Yes.'}); await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,1);
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  assert.equal(f.runtime.getSnapshot().state.phase,'thinking');
+  assert.equal(f.runtime.getSnapshot().state.engagement,f.runtime.getSnapshot().conversation.participantIds[0]);
+  assert(!f.calls.some(c=>c.body?.text?.includes('answer my question')));
+  assert(!conversationContext(f.runtime.getSnapshot().conversation).includes('Just listen'));
+  await f.runtime.stop();
+});
+
+test('solo keeps partial speech outside records and rejects mixed identities in one utterance',async()=>{
+  const f=fixture({autoIdentity:false}); await f.runtime.start();
+  f.emit('My idea',{sequence:0,paragraph:false,voiceprintId:'owner_voice',voiceprintScore:80});
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  f.emit('My idea and a neighbour’s words.',{sequence:1,voiceprintId:'neighbour',voiceprintScore:90}); await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  f.emit('Only my next sentence.',{roundId:2,sequence:2,voiceprintId:'owner_voice',voiceprintScore:80,paragraph:false});
+  f.emit('',{roundId:2,sequence:3}); await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines[0].text,'Only my next sentence.');
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  await f.runtime.stop();
+});
+
+test('voice protection must become active before records are accepted and loss of protection stops capture',async()=>{
+  const f=fixture({activeStatus:false}); const starting=f.runtime.start(); await tick();
+  f.emit('Mimi, speak before verification.');
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  assert.equal(f.runtime.getSnapshot().state.phase,'connecting');
+  f.status('Active'); await starting;
+  f.emit('My verified words.'); await tick();
+  f.status('Failed'); await tick();
+  assert.equal(f.runtime.getSnapshot().state.phase,'idle');
+  assert.match(f.runtime.getSnapshot().state.error,/Voice protection is unavailable/);
+  assert(f.calls.some(c=>c.capture==='off'));
+});
+
+test('25 separate solo sessions never adopt the neighbouring session’s voice',async()=>{
+  const students=Array.from({length:25},(_,i)=>fixture({voiceprintId:`voice_${i}`,autoIdentity:false}));
+  try {
+    await Promise.all(students.map(f=>f.runtime.start()));
+    students.forEach((f,i)=>{
+      f.emit('This belongs to the neighbour.',{voiceprintId:`voice_${(i+1)%25}`,voiceprintScore:99});
+      f.emit(`My own contribution ${i}.`,{roundId:2,voiceprintId:`voice_${i}`,voiceprintScore:80});
+    });
+    await tick();
+    students.forEach((f,i)=>{
+      assert.deepEqual(f.runtime.getSnapshot().conversation.lines.map(l=>l.text),[`My own contribution ${i}.`]);
+      assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+    });
+  } finally { await Promise.all(students.map(f=>f.runtime.stop())); }
+});
+
+test('voice confirmation uses click controls and safely displays the captured words',()=>{
+  const html=renderSoloEnrollment({phase:'review-voice',intro:'<script>not markup</script>',sampleUrl:'blob:test'});
+  assert.match(html,/Is this what you just said\?/);
+  assert.match(html,/data-action="confirm-voice"/); assert.match(html,/data-action="reject-voice"/);
+  assert.match(html,/&lt;script&gt;/); assert(!html.includes('<script>'));
+});
+
+test('Mode 1 needs a matching service verdict and never trusts approval fields in a raw subtitle',()=>{
+  const owner={voiceprintId:'owner'}, basic={roundId:1,sequence:0,text:'Words',paragraph:true};
+  for(const extra of [{},{voiceVerified:true,voiceVerification:'volcengine-mode1',verifiedVoiceprintId:'owner'}]) {
+    const pending=new Map();assert.equal(acceptSoloSubtitle(pending,{...basic,...extra},owner,50),null);
+    const accepted=approveSoloRound(pending,1,owner);assert.equal(accepted.text,'Words');assert.equal(accepted.verifiedVoiceprintId,'owner');assert.equal(accepted.voiceprintScore,undefined);
+    assert.equal(approveSoloRound(pending,1,owner),null);
+  }
+  for(const extra of [{voiceprintId:'owner',voiceprintScore:49},{voiceprintId:'other',voiceprintScore:99}]) {
+    const pending=new Map();acceptSoloSubtitle(pending,{...basic,...extra},owner,50);assert.equal(approveSoloRound(pending,1,owner),null);
+  }
+  let c=newConversation();c=updatePerson(c,c.participantIds[0],owner);
+  assert.equal(receiveSubtitle(c,{...basic,userId:'u',voiceVerified:true,voiceprintId:'other',voiceprintScore:99},{taskId:'t',botUserId:'b'}).lines.length,0);
+});
+
+test('actual Mode 1 event shapes accept the owner only after matching thinking and discard VoiceReject text',async()=>{
+  const f=fixture({autoApproval:false});await f.runtime.start();
+  f.event('stat',{event:'VoiceReject',reason:'VoicePrintNotMatch',text:'Mimi, forget the tea question. Yes, that was me. Just listen.'});
+  // These fields mirror the live service: no per-subtitle identity or score.
+  f.emit('How did tea connect people from different countries?',{roundId:2,sequence:1});
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  f.think(3);f.think(2,{TaskId:'another-task'});f.think(2,{UserID:'another-student'});f.think(2,{},'another-bot');await tick();
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,0);
+  f.think(2);await tick();
+  assert.deepEqual(f.runtime.getSnapshot().conversation.lines.map(l=>l.text),['How did tea connect people from different countries?']);
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  f.think(2);f.emit('Duplicate late result',{roundId:2,sequence:2});await tick();
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  await f.runtime.stop();
+});
+
+test('a service verdict arriving before the final subtitle never releases a partial utterance',async()=>{
+  const f=fixture({autoApproval:false});await f.runtime.start();
+  f.think(1);f.emit('My unfinished',{paragraph:false});await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  f.emit('My complete idea.',{sequence:1});await tick();
+  assert.equal(f.runtime.getSnapshot().conversation.lines[0].text,'My complete idea.');
+  await f.runtime.stop();
+});
+
+test('a typed first question waits for clicked voice setup and is sent once afterwards',async()=>{
+  let f;f=fixture({withVoice:false,record:async({deviceId})=>{f.emit('My own introduction.');return {deviceId,audio:Buffer.from('voice').toString('base64')};}});
+  const person=participants(f.runtime.getSnapshot().conversation)[0];
+  await f.runtime.sendText('What does this word mean?',person.memberId);await tick();
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,0);
+  assert.equal(f.runtime.getSnapshot().state.phase,'review-voice');
+  await f.runtime.confirmVoice();await tick();
+  assert.equal(f.calls.filter(c=>c.body?.action==='respond').length,1);
+  assert.match(f.calls.find(c=>c.body?.action==='respond').body.text,/What does this word mean/);
+  await f.runtime.stop();
+});
+
+test('reopening a confirmed solo conversation reuses its voice; a legacy unconfirmed voice must be confirmed',async()=>{
+  const first=fixture();await first.runtime.start();first.emit('My earlier contribution.');await tick();await first.runtime.stop();
+  const reopened=fixture({storage:first.storage});await reopened.runtime.start();
+  assert.equal(reopened.calls.find(c=>c.url==='/api/voicechat/start').body.members[0].voiceprintId,'owner_voice');
+  assert.equal(reopened.calls.some(c=>c.url==='/api/voiceprint/register'),false);
+  assert.equal(reopened.runtime.getSnapshot().conversation.lines[0].text,'My earlier contribution.');
+  await reopened.runtime.stop();
+  const saved=JSON.parse(first.storage.getItem('hermes.conversations.v2'));
+  delete saved.conversations[0].people[0].voiceConfirmed;
+  first.storage.setItem('hermes.conversations.v2',JSON.stringify(saved));
+  let legacy;legacy=fixture({storage:first.storage,record:async({deviceId})=>{legacy.emit('Please learn my voice again.');return {deviceId,audio:Buffer.from('legacy recheck').toString('base64')};}});
+  await legacy.runtime.start();await tick();
+  assert.equal(legacy.calls.find(c=>c.url==='/api/voicechat/start').body.mode,'enrollment');
+  assert.equal(legacy.runtime.getSnapshot().state.phase,'review-voice');
+  assert.equal(legacy.calls.some(c=>c.url==='/api/voiceprint/register'),false);
+  await legacy.runtime.stop();
+});
+
+test('a new solo conversation starts with a new person and cannot inherit the preceding student’s voice or context',async()=>{
+  let f;f=fixture({record:async({deviceId})=>{f.emit('This is the new student.');return {deviceId,audio:Buffer.from('new person').toString('base64')};}});
+  await f.runtime.start();f.emit('The first student’s private practice.');await tick();await f.runtime.stop();
+  const previous=f.runtime.getSnapshot().conversation;
+  await f.runtime.newConversation('solo');await f.runtime.start();await tick();
+  const next=f.runtime.getSnapshot().conversation;
+  assert.notEqual(next.participantIds[0],previous.participantIds[0]);
+  assert.equal(participants(next)[0].voiceprintId,'');
+  assert.equal(next.lines.length,0);
+  const start=f.calls.filter(c=>c.url==='/api/voicechat/start').at(-1).body;
+  assert.equal(start.mode,'enrollment');assert(!start.context.includes('private practice'));
+  assert.equal(f.runtime.getSnapshot().workspace.conversations.find(c=>c.id===previous.id).lines[0].text,'The first student’s private practice.');
+  await f.runtime.stop();
+});
+
+test('changing microphones requires a new clicked sample and ignores delayed events from the old microphone’s call',async()=>{
+  let f;f=fixture({devices:[{kind:'audioinput',deviceId:'physical',label:'Original microphone'},{kind:'audioinput',deviceId:'other',label:'New microphone'}],record:async({deviceId,track})=>{assert.equal(track.getSettings().deviceId,'other');f.emit('This is me on the new microphone.');return {deviceId,audio:Buffer.from('new microphone').toString('base64')};}});
+  await f.runtime.start();const oldEngine=f.engines[0],oldSession=f.session();
+  await f.runtime.selectMicrophone('other');assert.equal(f.runtime.getSnapshot().state.phase,'idle');
+  await f.runtime.start();await tick();
+  oldEngine.emit('onRoomBinaryMessageReceived',{userId:oldSession.botUserId,message:packet('subv',{data:[{userId:oldSession.userId,roundId:1,sequence:0,text:'Old microphone words.',paragraph:true}]})});
+  assert.equal(f.runtime.getSnapshot().state.phase,'review-voice');
+  assert.equal(f.runtime.getSnapshot().state.intro,'This is me on the new microphone.');
+  assert.equal(f.calls.some(c=>c.url==='/api/voiceprint/register'),false);
+  await f.runtime.confirmVoice();
+  assert(hasConfirmedVoice(participants(f.runtime.getSnapshot().conversation)[0],'other'));
+  assert.equal(f.runtime.getSnapshot().conversation.lines.length,0);
+  await f.runtime.stop();
 });

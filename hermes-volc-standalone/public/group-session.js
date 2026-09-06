@@ -84,7 +84,9 @@ export function reduceSubtitle(lines, data, context) {
   const rawId = typeof data.voiceprintId === "string" ? data.voiceprintId : "";
   const score = typeof data.voiceprintScore === "number" ? data.voiceprintScore : null;
   const match = context.members.find(m => m.voiceprintId === rawId);
-  const identity = role !== 'student' ? null : context.enrollmentPersonId ?? (context.solo ? context.members[0]?.memberId : match && score !== null && score >= (context.voiceprintScore ?? VOICEPRINT_SCORE) && round !== null ? match.memberId : null);
+  const soloOwner = context.solo && data.voiceVerified === true && data.voiceVerification === 'volcengine-mode1' && data.verifiedVoiceprintId === context.members[0]?.voiceprintId ? context.members[0] : null;
+  if (role === 'student' && context.solo && !context.enrollmentPersonId && !soloOwner) return lines;
+  const identity = role !== 'student' ? null : context.enrollmentPersonId ?? soloOwner?.memberId ?? (match && score !== null && score >= (context.voiceprintScore ?? VOICEPRINT_SCORE) && round !== null ? match.memberId : null);
   const seen = [...new Set([...(old?.seenSpeakers ?? []), ...(identity ? [identity] : [])])];
   const ambiguous = seen.length > 1;
   const fragments = { ...(old?.fragments ?? {}) };
@@ -95,6 +97,7 @@ export function reduceSubtitle(lines, data, context) {
     text: old?.textCorrected ? old.text : role === "hermes" ? Object.keys(fragments).sort((a,b) => Number(a)-Number(b)).map(k => fragments[k]).join(" ") : text || old?.text || "",
     fragments, paragraph: data.paragraph === true || old?.paragraph === true,
     voiceprintId: rawId || old?.voiceprintId || "", voiceprintScore: score,
+    ...(soloOwner ? {voiceVerified:true,verifiedVoiceprintId:data.verifiedVoiceprintId,voiceVerification:data.voiceVerification} : {}),
     seenSpeakers: seen, ambiguous,
     speakerId: old?.corrected ? old.speakerId : ambiguous ? null : (!text && old ? old.speakerId : identity),
     corrected: old?.corrected ?? false,
