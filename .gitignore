@@ -3,12 +3,15 @@
 !.env.example
 .dev.vars*
 !.dev.vars.example
-!/hermes-voice-coach/.env
 !/hermes-volc-standalone/.env.local
 !/hermes-volc-standalone/.dev.vars
 
-# Other local settings and runtime data
+# Runtime data (created by the server, not source code)
 .hermes-settings.json*
+.mimi-students.json*
+.mimi-show-state.json*
+.mimi-classroom*
+show-audio/
 *.pem
 *.key
 *.p12

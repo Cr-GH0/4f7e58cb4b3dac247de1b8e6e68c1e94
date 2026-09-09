@@ -33,5 +33,5 @@ export async function callSettings(input, ids, store, secret) {
 export async function startSettings(ids, store, secret) {
   const saved = await store.current();
   const configTicket = await signTicket({ purpose: 'voice-config', taskId: ids.taskId, roomId: ids.roomId, revision: saved.revision, expiresAt: Date.now() + 20 * 60 * 1000 }, secret);
-  return { settings: saved.settings, result: { configTicket, configRevision: saved.revision, voiceprintScore: saved.settings.voiceprint.score } };
+  return { settings: saved.settings, result: { configTicket, configRevision: saved.revision } };
 }

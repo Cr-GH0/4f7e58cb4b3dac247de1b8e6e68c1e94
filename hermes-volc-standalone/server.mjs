@@ -11,15 +11,21 @@ import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { voiceRegistrationRequest } from "./public/group-session.js";
 import { buildHermesVoiceChatRequest, buildVoiceUpdates } from "./public/voice-chat-config.js";
+import { talkRequest, readSpeechCredentials, readArkKey } from "./public/talk-api.js";
 import { fileSettingsStore } from './admin-store-node.js';
 import { adminRequest } from './admin-api.js';
 import { startSettings, callSettings } from './admin-security.js';
+import { fileStudentStore } from './student-store-node.js';
+import { studentRequest, currentStudent } from './student-api.js';
+import { createShowHandler } from './show-api.js';
+import { fileShowStore } from './show-store-node.js';
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
 const settingsStore = fileSettingsStore(join(__dirname, '.hermes-settings.json'));
+const students = fileStudentStore(join(__dirname, '.mimi-students.json'));
+const showStore = fileShowStore({ statePath: join(__dirname, '.mimi-show-state.json'), contentPath: join(__dirname, 'show-content.json'), audioDir: join(__dirname, 'show-audio') });
 
 // ---------------------------------------------------------------------------
 // 1. Load Volcengine credentials from .env.local (single source of truth)
@@ -47,6 +53,11 @@ for (const [k, v] of Object.entries(CFG)) {
   if (!v) throw new Error(`Missing credential ${k} in .env.local`);
 }
 
+const showHandler = createShowHandler({
+  store: showStore, students, secret: CFG.appKey, password: process.env.HERMES_ADMIN_PASSWORD,
+  settings: async () => (await settingsStore.current()).settings, speech: readSpeechCredentials(),
+});
+
 // ---------------------------------------------------------------------------
 // 2. Volcengine OpenAPI V4 signing (mirrors @volcengine/openapi Signer)
 // ---------------------------------------------------------------------------
@@ -63,7 +74,6 @@ function hmac(key, msg) {
 }
 
 function signVolcengine({ action, bodyStr }) {
-  const apiVersion = action === "RegisterVoicePrint" ? "2024-12-01" : RTC_API_VERSION;
   const HEADER_VALUES = {
     host: RTC_API_HOST,
     "x-content-sha256": sha256Hex(bodyStr),
@@ -76,7 +86,7 @@ function signVolcengine({ action, bodyStr }) {
   const date8 = datetime.slice(0, 8);
   const bodyHash = HEADER_VALUES["x-content-sha256"];
 
-  const queryString = `Action=${action}&Version=${apiVersion}`;
+  const queryString = `Action=${action}&Version=${RTC_API_VERSION}`;
   // Signable headers (content-type is intentionally NOT signed per Volcengine spec)
   const signedHeaderKeys = ["host", "x-content-sha256", "x-date"];
   const canonicalHeaders = signedHeaderKeys
@@ -110,7 +120,7 @@ function signVolcengine({ action, bodyStr }) {
   const authorization = `HMAC-SHA256 Credential=${CFG.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   return {
-    url: `https://${RTC_API_HOST}/?Action=${action}&Version=${apiVersion}`,
+    url: `https://${RTC_API_HOST}/?Action=${action}&Version=${RTC_API_VERSION}`,
     headers: {
       Host: RTC_API_HOST,
       "Content-Type": "application/json",
@@ -125,7 +135,7 @@ async function callRtcOpenApi(action, body) {
   const bodyStr = JSON.stringify(body);
   const { url, headers } = signVolcengine({ action, bodyStr });
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), action === "RegisterVoicePrint" ? 25_000 : 12_000);
+  const timeout = setTimeout(() => controller.abort(), 12_000);
   let response;
   try {
     response = await fetch(url, {
@@ -275,6 +285,7 @@ async function serveStatic(req, res) {
   let urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
   if (urlPath === "/") urlPath = "/index.html";
   if (urlPath === "/admin" || urlPath === "/admin/") urlPath = "/admin.html";
+  if (urlPath === "/diagnose" || urlPath === "/diagnose/") urlPath = "/diagnose.html";
   const safe = normalize(urlPath).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(PUBLIC_DIR, safe);
   if (!filePath.startsWith(PUBLIC_DIR) || !existsSync(filePath)) {
@@ -282,7 +293,7 @@ async function serveStatic(req, res) {
     return;
   }
   const data = await readFile(filePath);
-  res.writeHead(200, { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" });
+  res.writeHead(200, { "Content-Type": MIME[extname(filePath)] || "application/octet-stream", "Cache-Control": "no-cache" });
   res.end(data);
 }
 
@@ -290,6 +301,44 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
     const path = url.pathname;
+
+    if (path.startsWith('/api/student/')) {
+      const body = ['GET','HEAD'].includes(req.method) ? undefined : JSON.stringify(await readJsonBody(req));
+      const protocol = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const request = new Request(new URL(req.url, `${protocol}://${req.headers.host}`), { method: req.method, headers: req.headers, body });
+      const response = await studentRequest(request, students, CFG.appKey);
+      res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(await response.text()); return;
+    }
+
+    // Compatibility voice mode: recording upload instead of the RTC SDK.
+    if (req.method === "POST" && path === "/api/talk") {
+      const body = JSON.stringify(await readJsonBody(req));
+      const protocol = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const request = new Request(new URL(req.url, `${protocol}://${req.headers.host}`), { method: req.method, headers: req.headers, body });
+      const response = await talkRequest(request, {
+        store: students, secret: CFG.appKey, settings: (await settingsStore.current()).settings,
+        speech: readSpeechCredentials(), arkKey: readArkKey(),
+      });
+      res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(await response.text()); return;
+    }
+
+    // Classroom show: teacher trigger, desktop state/heartbeat, prepared
+    // content and narration audio. Runs before /api/admin/ so the audio
+    // synthesis endpoint reaches it; responses can be binary.
+    if (path.startsWith('/api/show/') || path === '/api/admin/show-audio') {
+      const body = ['GET','HEAD'].includes(req.method) ? undefined : JSON.stringify(await readJsonBody(req));
+      const protocol = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const request = new Request(new URL(req.url, `${protocol}://${req.headers.host}`), { method: req.method, headers: req.headers, body });
+      const response = await showHandler(request);
+      res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer())); return;
+    }
+
+    if (req.method === "GET" && path === "/api/config") {
+      const settings = (await settingsStore.current()).settings;
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ autoSendPauseMs: settings.chat?.autoSendPauseMs ?? 1200 }));
+      return;
+    }
 
     if (path.startsWith('/api/admin/')) {
       const body = ['GET','HEAD'].includes(req.method) ? undefined : JSON.stringify(await readJsonBody(req));
@@ -301,6 +350,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/session") {
+      const account = await currentStudent(new Request('http://localhost', { headers: req.headers }), students, CFG.appKey);
+      if (!account) throw new Error('Sign in to your Mimi account before starting.');
       const suffix = randomUUID().replaceAll("-", "");
       const roomId = `hermes_${suffix}`;
       const userId = `student_${suffix}`;
@@ -323,6 +374,9 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && path === "/api/voicechat/start") {
       const input = await readJsonBody(req);
+      const account = await currentStudent(new Request('http://localhost', { headers: req.headers }), students, CFG.appKey);
+      if (!account) throw new Error('Sign in to your Mimi account before starting.');
+      if (account.role === 'teacher') throw new Error('Teacher accounts use the classroom console.');
       const ids = parseIdentifiers(input);
       const configuration = await startSettings(ids, settingsStore, CFG.appKey);
 
@@ -334,7 +388,7 @@ const server = createServer(async (req, res) => {
           taskId: ids.taskId,
           studentUserId: ids.userId,
           agentUserId: ids.botUserId,
-          members: input.members, mode: input.mode, context: input.context,
+          context: input.context,
         }, configuration.settings),
       );
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, ...configuration.result }));
@@ -347,14 +401,6 @@ const server = createServer(async (req, res) => {
       const settings = input.action === 'interrupt' ? undefined : await callSettings(input, ids, settingsStore, CFG.appKey);
       for (const body of buildVoiceUpdates(input, CFG.appId, ids, settings)) await callRtcOpenApi("UpdateVoiceChat", body);
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true }));
-      return;
-    }
-
-    if (req.method === "POST" && path === "/api/voiceprint/register") {
-      const body = voiceRegistrationRequest(await readJsonBody(req), CFG.appId);
-      const result = await callRtcOpenApi("RegisterVoicePrint", body);
-      if (typeof result.Result !== "string" || !result.Result) throw new Error("RegistrationFailed: No voiceprint ID returned.");
-      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ voiceprintId: result.Result }));
       return;
     }
 

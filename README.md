@@ -1,6 +1,19 @@
 # Mimi 语音教练
 
-产品界面使用英文，角色与显示名称统一为 Mimi。保留教案的近白、朱红、蓝灰与细金线，使用用户提供的 Mimi 人物形象。首页突出 Start talking，通话控制固定在底部；History 从左侧打开，Settings 从右侧打开。
+**部署**：`git clone` → `cd hermes-volc-standalone` → `node server.mjs`。详见 [DEPLOY.md](./DEPLOY.md)。
+
+## 文字输入架构（2026-09-09 重构，现行）
+
+声纹识别与麦克风链路判定为不可靠，整层废除。现行架构：
+
+- **输入一律文字**：手机用微信语音输入法之类把英语说成文字；输入框停顿自动发送（无发送键，桌面 Enter 立即发；时长读后台 `chat.autoSendPauseMs`，默认 1200ms，自内容最后一次变化起算）。
+- **对话管道不变**：仍是火山 RTC 房间与豆包智能体——学生进房**只订阅不推流**（零麦克风权限），文字经 `/api/voicechat/update` 注入，Mimi 在房间内语音回答并出字幕；打不开房间的浏览器粘性退到 `/api/talk` 纯文字兜底（回复合成 mp3 播放）。
+- **账号**：学生=四位数字码（注册只要称呼，上限 50）；教师=名字白名单 `sunyumeng`（`student-api.js` 顶部，无口令，服务端自动建号，`role:'teacher'`）。
+- **课堂演出**：教师手机即主应用（新会话首条消息 `POST /api/show/say` 触发，同会话只触发一次；触发前服务端检查大屏 3 秒心跳）。桌面端同一应用宽屏布局（左聊天右报告面板），轮询 `GET /api/show/state` 兼心跳并演出：触发句与"收到"上屏（预生成音频经大屏扬声器）→ 约十秒工具轨迹（步骤文案课前写在 `show-content.json`，`*词*` 表示改动标记）→ 报告卡与右栏一页两段报告（两案例对照+一行点睛、方法论编号裸句）→ 旁白分段播放并 `POST /api/show/progress` 上报段位（刷新续演）→ 讲完静止。课前内容在 `show-content.json`，后台 Models 页按钮或 `POST /api/admin/show-audio` 用火山 TTS 重新合成全部演出语音。探针：`node probe-show.mjs [baseUrl]`（30 项，含真实 TTS/房间/模型各一次）。
+- **已删除**：声纹登记与 `/api/voiceprint/register`、三人小组模式、录音兜底、solo-voice/voice-enrollment/mobile-audio 模块、单人双确认链路、`settings.voiceprint`（换 `chat.autoSendPauseMs`）。worker.js 保留同构路由；演出内容文件仅 Node 版提供。
+
+下文涉及声纹、小组、录音、判停、兼容录音的段落均为历史记录，不再描述现行行为。
+
 
 交互参考：[ChatGPT Voice](https://help.openai.com/en/articles/20001274/) 的开始、静音、结束与同一对话中的文字输入；[Duolingo Video Call](https://blog.duolingo.com/video-call/) 的角色中心布局；[Duolingo 界面整理](https://blog.duolingo.com/core-tabs-redesign/) 的字体、间距与层级一致性；[ELSA AI](https://elsaspeak.com/en/ai/) 的交流与后续反馈分阶段呈现。这些单人产品的交互案例不能证明三人声纹识别效果。
 
@@ -8,10 +21,12 @@
 
 ## 使用方式
 
-访问主应用根路径 `/`。原 `/prototype` 入口现在跳转到真实应用，不再显示示例姓名和模拟对话。
+访问根路径 `/` 即进入应用。
 
 - **模式标签**：顶部保留“Solo｜Group of 3”。结束语音后可切换，优先回到该模式已有的对话；通话中保留当前标签并暂停切换。
 - **单人**：首次点击“Start talking”后录制 20 秒声音，请说约 15 秒后停顿。Mimi 显示识别文字并提供录音回放，询问“Is this what you just said?”。只有点击“Yes, that was me”才登记并绑定这段声音；说“yes”不会确认。“No, try again”丢弃这一段并重新录制。称呼可选。已确认的声音只用于当前对话和麦克风。
+- **兼容模式（录音上传，兜底）**：目标机型为国产安卓与苹果手机，学生使用 Chrome / Edge / Safari / Firefox。火山 RTC SDK 依赖 WebRTC，个别无法运行它的浏览器里 Mimi 会自动改用录音模式：点“Start talking”开始录音（最长 45 秒），再点“Tap to send”发送，识别、回答后以合成语音回放。这是兜底路径，不要为它做专门优化。
+- **真机诊断**：部署地址下有 `/diagnose` 诊断页，在任何浏览器打开并点“Start diagnosis”，会逐步实测麦克风、内核、RTC SDK 加载、进房握手、推流和真实音量，生成一段可复制的报告，用于排查某台手机的实时通话问题。
 - **麦克风**：优先使用浏览器的系统默认输入，通话底部用真实输入音量显示收音状态。设备选择收在右上角“Settings”；单人更换麦克风会结束当前通话，继续时重新确认新设备的声音；小组需先结束语音后更换。
 - **三人小组**：依次点击录音，说出称呼并用英语介绍自己约 20 秒；称呼可自动提取，也可直接输入或修改。声音登记成功才保存声纹 ID，失败可单独重录；三人准备后自动转入讨论。
 - **回应控制**：小组讨论默认只记录。说“Mimi, …”或点击“Ask Mimi”提出一个问题，触发一次回答后回到记录状态。文字提问也会消耗这次提问状态；后续普通讨论不会继承它。“先听我说”或“just listen”暂停回答，麦克风仍记录。关闭麦克风则停止收音。
@@ -24,7 +39,7 @@
 
 ## 实现与维护入口
 
-主应用：[hermes-voice-coach](./hermes-voice-coach/README.md)，React / Vinext；独立版：[hermes-volc-standalone](./hermes-volc-standalone/)，Node / Cloudflare Worker。它们属于同一项目。内部目录和环境变量保留原标识，产品名称为 Mimi。
+当前正式运行与发布的只有**独立版** [hermes-volc-standalone](./hermes-volc-standalone/)（Node / Cloudflare Worker 同构）。React / Vinext 主应用已于 2026-09-08 应老板要求移出主目录，连同早期原型归档在 `../Mimi语音教练_备份/旧稿归档/hermes-voice-coach`；**自动化测试改在完整副本 `../Mimi语音教练_备份` 中运行**（改动同步过去后在其 `hermes-voice-coach` 目录执行 `npm test`）。
 
 本目录是 Mimi 的独立 Git 根目录。源码仓库为 [Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94](https://github.com/Cr-GH0/4f7e58cb4b3dac247de1b8e6e68c1e94)，后续提交和推送在本目录执行。上层教学工作区的历史没有导入此仓库。
 
@@ -32,13 +47,12 @@
 
 | 实现 | 已附配置文件 | 读取方式 |
 | --- | --- | --- |
-| React / Vinext 主应用 | `hermes-voice-coach/.env` | 开发和本地启动时自动读取；已有 `.env.local` 优先 |
 | Node 独立版 | `hermes-volc-standalone/.env.local` | `server.mjs` 自动读取 |
 | Worker 独立版 | `hermes-volc-standalone/.dev.vars` | 本地 Wrangler 自动读取；部署者导入服务器环境 |
 
 部署由接手者按所选平台完成。老师使用部署后的应用，不需要填写密钥；后台仍使用原管理密码。
 
-两端共同使用独立版 `public` 内的模块：
+独立版 `public` 内的核心模块：
 
 | 文件 | 作用 |
 | --- | --- |
@@ -51,9 +65,17 @@
 | `solo-voice.js` | 单人声音绑定；按当前任务与轮次关联最终字幕和服务端处理结果 |
 | `voice-chat-config.js` | 三种服务配置：单人、声音登记、三人识别；统一的教练提示词与更新请求 |
 
-服务端接口为 `/api/session`、`/api/voiceprint/register`、`/api/voicechat/start`、`/api/voicechat/update`、`/api/voicechat/stop`。ASR 使用自动判停，独立输出完整发言。客户端默认关闭远端播放，先取消原生自动回答，再按回应控制决定是否请求新回答；只有更新上下文后明确请求的新轮次才显示、播放。更新失败不会放行原生回答。声音登记期间关闭 LLM。
+服务端接口为 `/api/session`、`/api/voiceprint/register`、`/api/voicechat/start`、`/api/voicechat/update`、`/api/voicechat/stop`、`/api/talk`（兼容模式）。ASR 使用自动判停，独立输出完整发言。**单人模式走原生回答链路**（2026-09-08 起）：客户端不再静音和取消服务的自动回答，学生说完由智能体直接开口，与火山控制台智能体的听感一致；应用只在"先听我说/just listen"、未叫 Mimi 前的普通发言、文字输入和提纲生成时才发送 interrupt 或触发回答请求。单人判停开启智能语义判停（`AIVAD: true`）：语义完整时静音 800 毫秒即判停，语义未完最长容忍 2 秒，另配 `ExpireTime: 1200` 在嘈杂环境兜底强制判停；智能体保留最近 12 轮自动历史（`HistoryLength: 12`），开场 SystemMessages 携带更正记录快照供重连续接，人工更正后仍按原机制同步。小组模式保持原设计：默认只记录、被叫到才回答（interrupt → UpdateParameters → ExternalTextToLLM 一次往返），判停静音 1000 毫秒、历史长度 1、置顶中性对话占位。声音登记期间关闭 LLM。
 
-单人使用 `VoicePrint.Mode=1`、唯一 `IdList`、`EnableSV=true`、Version 2 声纹及 `ProcessMode/SVMode=2`。必须收到 `VoicePrintStatus: Active` 才进入对话；保护失败就停止通话。此模式的实际字幕没有 Mode 2 的声纹 ID、分数，因此应用同时等待最终字幕与同一任务、用户、轮次的原生 `thinking` 回调，才写入记录并请求回答；`VoiceReject` 中的文字始终忽略。登记录音仅在内存中等待点击确认，不进入对话或提纲。单人关闭 ASR 的二次非流式识别；开启时的合成声音重叠测试曾把旁人的内容写入最终字幕。
+单人使用 `VoicePrint.Mode=1`、唯一 `IdList`、`EnableSV=true`、Version 2 声纹及 `ProcessMode/SVMode=2`。必须收到 `VoicePrintStatus: Active` 才进入对话；保护失败就停止通话。此模式的实际字幕没有 Mode 2 的声纹 ID、分数，因此应用同时等待最终字幕与同一任务、用户、轮次的原生 `thinking` 回调，才写入记录；`thinking` 回调只在声纹通过的轮次出现，因此也兼作"回答即将到来"的界面信号。`VoiceReject` 中的文字始终忽略。登记录音仅在内存中等待点击确认，不进入对话或提纲。单人关闭 ASR 的二次非流式识别；开启时的合成声音重叠测试曾把旁人的内容写入最终字幕。
+
+## 课前声纹绑定与课堂登录
+
+声纹绑定与语音会话完全分开：注册流程不开 RTC 房间、不开识别任务、不调用模型，学生课前用任意手机浏览器即可完成。
+
+- **课前**：学生打开页面，录 20 秒英语自我介绍，回放确认“只含本人声音”后保存。服务端调用火山的 `RegisterVoicePrint`（接口版本 2024-12-01）登记声纹，并当场发放 4 位账号数字；声纹 ID 只存在服务端账号上，浏览器不保存原始录音。50 个账号为上限。
+- **课堂**：学生掏出手机打开同一地址，cookie 会话自动恢复为专属账号（有效期 180 天），点击“Start talking”即进入对话。单人通话使用 `VoicePrint.Mode=1`，仅比对登录账号登记的那一枚声纹；他人的声音在进入模型前就被 `VoiceReject` 拒绝，不会触发回答，也不会写入记录。
+- **边界**：目标机型为**国产安卓手机与苹果手机**，学生统一使用 **Chrome / Edge / Safari / Firefox** 四种浏览器（2026-09-08 老板拍板，取代此前"统一 Edge"的口径）。RTC 声纹守护在这些系统浏览器上生效；无法运行 RTC 的个别环境自动落入录音兜底模式，其身份由登录账号保证（一台手机只有一个已登录学生）；教师应要求这类学生使用本人手机。
 
 ## 数据与能力边界
 
@@ -63,7 +85,7 @@
 - 单人声纹识别属于概率判断，不能保证在 25 人同时说话、外放回声或紧贴旁人麦克风等条件下零串音。建议使用靠近嘴部的耳麦，并在实际教室、实际电脑和手机上验证。当前没有加入每句话的人工确认；初次点击确认只能确认登记样本，不能替后续每句话证明身份。
 - 三人使用预注册声纹 `VoicePrint.Mode=2`。匹配门限暂为 50，来自官方推荐的 40～60 区间，仍需真实课堂校准。没有匹配、分数不足或检测到混合身份的发言留作“待确认”；不继承上一人的身份。重叠语音的完整分离不在当前能力保证内。
 - “叫 Mimi”“先听我说”的判断由明确短语和当前交谈人驱动，并非能够理解所有多人交谈意图的模型。界面提供相同操作，供语音未正确触发时使用。
-- 每次回复使用最新更正记录，取最近约 24,000 字符及当前成员提纲；较早内容超出时在传给模型的数据中标明省略。使用方舟置顶的一组中性对话占满 1 轮自动历史，实际历史由应用记录供给，避免错误归属继续留在自动历史中。
+- 小组每次回复使用最新更正记录，取最近约 24,000 字符及当前成员提纲；较早内容超出时在传给模型的数据中标明省略。小组用方舟置顶的一组中性对话占满 1 轮自动历史，实际历史由应用记录供给，避免错误归属继续留在自动历史中；单人自 2026-09-08 起由智能体自动历史（12 轮）承担记忆，更正记录快照在重连与人工更正时同步。
 - 语音连接到期时结束本次连接并保留记录，可继续连接。用户结束、取消、离开页面时执行清理与停止请求；收到服务端停止确认前不会声称服务端已结束。
 
 ## 验证记录（2026-09-05）
@@ -92,16 +114,25 @@
 
 随后补齐重新打开、旧声纹缺少点击确认、新建对话及换麦克风后的隔离检查，共 59 项自动测试通过。真实本地 `/api/session` 并发返回 25 组不同的房间、用户、机器人、任务及令牌，逐一核对了令牌内的房间和用户绑定；这次只创建连接凭证，没有启动 25 路云端音频，因此不能作为火山引擎并发容量或课堂声学效果的验收。部署仍由部署方负责。
 
+## 验证记录（2026-09-08）
+
+课堂浏览器方案当日先定为统一 Edge、后调整为**四浏览器**（Chrome / Edge / Safari / Firefox，目标机型国产安卓与苹果手机）——以四浏览器口径为准。录音上传模式为自动兜底（RTC 不可用才触发），保留不再优化。新增 `/diagnose` 真机诊断页（`public/diagnose-client.js`、`diagnose.html`；主应用版 `app/diagnose/page.tsx` 已随源码归档），逐项实测麦克风权限、内核、RTC SDK 加载、进房握手、推流与真实音量并生成可复制报告，用于排查个别手机的实时通话问题。全量 75 项测试、lint、TypeScript 检查通过。兼容模式凭据（语音应用 + 方舟 Key）已配置完毕，识别→对话→合成全链路已用真实接口跑通。
+
+同日晚些时候：针对"长文本朗读识别只剩残片、日常回应偏慢"的重构。根因是单人模式每句回答都走应用中转（静音原生回答 → interrupt → 重传上下文 → 重新触发生成），迟到的 interrupt 还会打断下一句识别。修复：单人改用原生回答链路（对齐控制台智能体行为），判停改为 AIVAD 语义判停 + 800ms 静音 + `ExpireTime: 1200` 兜底，`HistoryLength` 提到 12；小组模式不变。受影响测试同步改写并新增原生回合连续显示/暂停抑制、interrupt 失败静音保持等断言，75 项测试与 `tsc --noEmit` 通过（lint 的 19 个报错均为存量问题，行号都在本次未改动的代码上）。真实课堂听感（长文本跟读、旁人插话、嘈杂环境）待老板验收。
+
+部署仍由接手者完成；两条路径的已知情况见《接手文档》第五节。
+
 ## 运行
 
 后台入口位于右上角“Settings”内，也可直接访问 `/admin`。可修改实际使用的对话/提纲大模型、语音识别模型、语音合成模型与音色、声纹匹配阈值，以及对话与提纲提示词。对话模型和声音自动读取官方目录，可搜索名称、试听声音；教练指令按用途编辑，提供使用说明和中文范例。声纹使用固定接口，目前没有独立的型号切换。保存后对新语音连接生效，已有连接继续使用原配置。登录密码由服务端 `HERMES_ADMIN_PASSWORD` 设置。
 
-主应用首次启用后台前，运行 `npm run db:migrate` 创建本地 D1 配置表；本次工作区已经执行。主应用配置存放在 `.wrangler/state`，独立 Node 版存放在 `hermes-volc-standalone/.hermes-settings.json`，两者是不同运行实例，各自在自己的后台修改。独立 Worker 版使用 `DB` 绑定和同一份迁移，未来部署前需将 `wrangler.toml` 的数据库占位 ID 替换为目标数据库并配置管理密码；本次未部署。
+独立 Node 版的后台配置存放在 `hermes-volc-standalone/.hermes-settings.json`，学生账号存放在 `hermes-volc-standalone/.mimi-students.json`。独立 Worker 版使用 `DB` 绑定，部署前需将 `wrangler.toml` 的数据库占位 ID 替换为目标数据库并配置管理密码。
 
-- 主应用：使用 Node.js 22.13 或更高版本。进入 `hermes-voice-coach`，复制 `.env.example` 为 `.env.local` 并填写服务凭据和管理密码，依次运行 `npm ci`、`npm run db:migrate`、`npm run dev`。打开 `http://localhost:3000/`。`npm test` 执行构建和测试，`npm run lint` 检查代码。
-- 独立 Node 版：进入 `hermes-volc-standalone`，复制 `.env.example` 为 `.env.local` 并填写相同字段，运行 `node server.mjs`。不需要安装 npm 依赖。
+- 独立 Node 版（当前唯一运行版本）：进入 `hermes-volc-standalone`，复制 `.env.example` 为 `.env.local` 并填写相同字段，运行 `node server.mjs`。不需要安装 npm 依赖。
 - 独立 Worker 版：本地开发时将填写后的 `.env.local` 复制为 `.dev.vars`；云端凭据通过 `wrangler secret put` 配置。`wrangler.toml` 只包含运行与数据库绑定设置，不包含服务密钥。部署前仍需配置目标 D1 数据库。
-- 两端需要 HTTPS 或 localhost；主应用与独立版若运行在不同端口，浏览器存储彼此独立。
+- 需要运行自动化测试或启动旧 React 主应用时，到完整副本 `../Mimi语音教练_备份` 的 `hermes-voice-coach` 目录执行（主应用源码已归档在 `../Mimi语音教练_备份/旧稿归档/hermes-voice-coach`）。
+- 运行需要 HTTPS 或 localhost（手机麦克风权限要求安全环境）。
+- **兼容模式凭据（可选，未配置时兼容模式提示管理员）**：RTC 主链路不受影响。启用需在 `.env.local` 追加两组值：① 火山控制台“语音技术”创建应用并勾选“录音文件识别极速版”和“语音合成大模型”，把应用页的 **APP ID** 与 **Access Token** 填入 `VOLC_SPEECH_APP_ID`、`VOLC_SPEECH_ACCESS_TOKEN`；② 方舟控制台创建 **API Key** 填入 `ARK_API_KEY`，兼容模式的对话使用后台配置的同一个模型、提示词与音色。仓库内 `.env.example` 已含全部字段样例。
 - `.env.local`、`.dev.vars`、管理设置、本地数据库、日志、依赖和构建产物不提交。仓库内只提供空白凭据样例。独立版随附的 RTC SDK 许可见 [public/sdk/LICENSE](./hermes-volc-standalone/public/sdk/LICENSE)。
 
 ## 官方接口依据

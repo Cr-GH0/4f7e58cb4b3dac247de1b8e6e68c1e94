@@ -1,13 +1,39 @@
 import { d1SettingsStore } from './admin-store.js';
 import { adminRequest } from './admin-api.js';
 import { startSettings, callSettings } from './admin-security.js';
+import { d1StudentStore } from './student-store.js';
+import { studentRequest, currentStudent, TEACHER_NAMES } from './student-api.js';
+import { createShowHandler } from './show-api.js';
 // Hermes Voice Coach — Cloudflare Worker entry (deployable, stable URL).
 // Same logic as server.mjs but uses the Web Crypto API (global `crypto`)
 // so it runs unchanged on Cloudflare Workers AND on Node 22 (for local tests).
 // Static assets are served via the ASSETS binding (wrangler.toml).
 
-import { voiceRegistrationRequest } from "./public/group-session.js";
 import { buildHermesVoiceChatRequest, buildVoiceUpdates } from "./public/voice-chat-config.js";
+import { talkRequest, readSpeechCredentials, readArkKey } from "./public/talk-api.js";
+
+// The Worker deployment path is not in use. The classroom show needs the
+// prepared show-content.json, which only the Node server serves; these
+// isolate-local stand-ins keep the routes reachable and honestly limited.
+const memoryShowStore = () => {
+  let state = { version: 0, active: false, conversationId: null, triggerText: '', startedAt: null, lastSegment: 0, usedConversations: [] };
+  const audio = new Map();
+  return {
+    async state() { return state; },
+    async trigger(conversationId, text) {
+      if (state.usedConversations.includes(conversationId)) return { created: false, data: state };
+      state = { ...state, version: state.version + 1, active: true, conversationId, triggerText: text, startedAt: new Date().toISOString(), lastSegment: 0, usedConversations: [...state.usedConversations, conversationId] };
+      return { created: true, data: state };
+    },
+    async saveProgress(version, segment) { if (state.version === version) state = { ...state, lastSegment: Math.max(state.lastSegment, segment) }; return state; },
+    async finish(version) { if (state.version === version) state = { ...state, active: false }; return state; },
+    async loadContent() { throw new Error('The classroom show runs on the Node server, which serves show-content.json.'); },
+    async writeAudioAll(entries) { for (const { id, bytes } of entries) audio.set(id, bytes); },
+    async readAudio(id) { return audio.get(id) ?? null; },
+    async audioReady() { return false; },
+  };
+};
+let workerShowHandler = null;
 
 const RTC_API_HOST = "rtc.volcengineapi.com";
 const RTC_API_VERSION = "2025-06-01";
@@ -41,7 +67,7 @@ async function hmacBytes(keyBytes, msgBytes) {
 // Volcengine OpenAPI V4 signing (mirrors @volcengine/openapi Signer)
 // ---------------------------------------------------------------------------
 async function signVolcengine({ action, bodyStr }, credentials) {
-  const apiVersion = action === "RegisterVoicePrint" ? "2024-12-01" : RTC_API_VERSION;
+  
   const xDate = new Date()
     .toISOString()
     .replace(/\.\d{3}Z$/, "Z")
@@ -59,7 +85,7 @@ async function signVolcengine({ action, bodyStr }, credentials) {
     .map((k) => `${k}:${headerValues[k]}`)
     .join("\n");
   const signedHeaders = signedHeaderKeys.join(";");
-  const queryString = `Action=${action}&Version=${apiVersion}`;
+  const queryString = `Action=${action}&Version=${RTC_API_VERSION}`;
 
   const canonicalRequest = [
     "POST",
@@ -88,7 +114,7 @@ async function signVolcengine({ action, bodyStr }, credentials) {
   const authorization = `HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   return {
-    url: `https://${RTC_API_HOST}/?Action=${action}&Version=${apiVersion}`,
+    url: `https://${RTC_API_HOST}/?Action=${action}&Version=${RTC_API_VERSION}`,
     headers: {
       Host: RTC_API_HOST,
       "Content-Type": "application/json",
@@ -103,7 +129,7 @@ async function callRtcOpenApi(action, body, credentials) {
   const bodyStr = JSON.stringify(body);
   const { url, headers } = await signVolcengine({ action, bodyStr }, credentials);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), action === "RegisterVoicePrint" ? 25_000 : 12_000);
+  const timeout = setTimeout(() => controller.abort(), 12_000);
   let response;
   try {
     response = await fetch(url, {
@@ -246,10 +272,32 @@ function getCredentials(env) {
 export async function handleRequest(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
+  const credentials = getCredentials(env);
+  if (path.startsWith('/api/show/') || path === '/api/admin/show-audio') {
+    workerShowHandler ??= createShowHandler({
+      store: memoryShowStore(), students: d1StudentStore(env.DB), secret: credentials.appKey,
+      password: env.HERMES_ADMIN_PASSWORD, settings: async () => (await d1SettingsStore(env.DB).current()).settings,
+      speech: readSpeechCredentials(env),
+    });
+    return workerShowHandler(request);
+  }
+  if (path === '/api/config' && request.method === 'GET') {
+    const settings = (await d1SettingsStore(env.DB).current()).settings;
+    return Response.json({ autoSendPauseMs: settings.chat?.autoSendPauseMs ?? 1200 }, { headers: { 'Cache-Control': 'no-store' } });
+  }
   if (path.startsWith('/api/admin/')) return adminRequest(request, d1SettingsStore(env.DB), env.HERMES_ADMIN_PASSWORD, {
     accessKeyId: env.VOLC_ACCESS_KEY_ID?.trim(), secretKey: env.VOLC_SECRET_ACCESS_KEY?.trim(),
   });
-  const credentials = getCredentials(env);
+  if (path.startsWith('/api/student/')) return studentRequest(request, d1StudentStore(env.DB), credentials.appKey);
+
+  // Compatibility voice mode: recording upload instead of the RTC SDK.
+  if (request.method === "POST" && path === "/api/talk") {
+    const saved = await d1SettingsStore(env.DB).current();
+    return talkRequest(request, {
+      store: d1StudentStore(env.DB), secret: credentials.appKey, settings: saved.settings,
+      speech: readSpeechCredentials(env), arkKey: readArkKey(env),
+    });
+  }
 
   if (request.method === "POST" && path === "/api/session") {
     const suffix = (crypto.randomUUID?.() ?? crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "")).replaceAll("-", "");
@@ -278,6 +326,9 @@ export async function handleRequest(request, env) {
 
   if (request.method === "POST" && path === "/api/voicechat/start") {
     const input = await request.json();
+    const account = await currentStudent(request, d1StudentStore(env.DB), credentials.appKey);
+    if (!account) throw new Error('Sign in to your Mimi account before starting.');
+    if (account.role === 'teacher' || TEACHER_NAMES.includes(account.account_code)) throw new Error('Teacher accounts use the classroom console.');
     const ids = parseIdentifiers(input);
     const configuration = await startSettings(ids, d1SettingsStore(env.DB), credentials.appKey);
 
@@ -289,7 +340,7 @@ export async function handleRequest(request, env) {
         taskId: ids.taskId,
         studentUserId: ids.userId,
         agentUserId: ids.botUserId,
-        members: input.members, mode: input.mode, context: input.context,
+        context: input.context,
       }, configuration.settings),
       credentials,
     );
@@ -302,13 +353,6 @@ export async function handleRequest(request, env) {
     const settings = input.action === 'interrupt' ? undefined : await callSettings(input, ids, d1SettingsStore(env.DB), credentials.appKey);
     for (const body of buildVoiceUpdates(input, credentials.appId, ids, settings)) await callRtcOpenApi("UpdateVoiceChat", body, credentials);
     return Response.json({ ok: true });
-  }
-
-  if (request.method === "POST" && path === "/api/voiceprint/register") {
-    const body = voiceRegistrationRequest(await request.json(), credentials.appId);
-    const result = await callRtcOpenApi("RegisterVoicePrint", body, credentials);
-    if (typeof result.Result !== "string" || !result.Result) throw new Error("RegistrationFailed: No voiceprint ID returned.");
-    return Response.json({ voiceprintId: result.Result });
   }
 
   if (request.method === "POST" && path === "/api/voicechat/stop") {

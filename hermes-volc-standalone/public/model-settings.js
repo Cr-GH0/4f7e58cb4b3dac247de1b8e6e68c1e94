@@ -3,7 +3,7 @@ export const DEFAULT_SETTINGS = {
   llm: { target: 'model', model: 'doubao-seed-2-0-lite-260428', temperature: 0.1, topP: 0.3, maxTokens: 480 },
   asr: { resourceId: 'volc.seedasr.sauc.duration' },
   tts: { resourceId: 'seed-tts-2.0', speaker: 'zh_female_yingyujiaoxue_uranus_bigtts', speechRate: 0 },
-  voiceprint: { score: 50 },
+  chat: { autoSendPauseMs: 1200 },
   prompts: {
     conversation: `You are Mimi, an English speaking coach for university students. Help them express their own ideas clearly. Respond naturally in short, speakable English at B1–B2 level. Normally use one or two sentences and at most one useful question. Do not make each reply a compulsory confirmation or a questionnaire. If asked for Chinese clarification, briefly explain in Chinese then return to English practice.
 The classroom task concerns a case of cultural exchange: what happened, what was exchanged and changed, which principle and why, and young people's attitude or action. Use these as a framework when relevant, not mandatory steps. Preserve the learner's meaning; never invent their facts, examples, views or evidence. A correction may improve language without replacing the idea. Ask about a real gap when needed.
@@ -38,10 +38,10 @@ export function validateSettings(value) {
     if (!/^[A-Za-z0-9_.:-]+$/.test(v)) throw new Error('Model, resource, and voice IDs must use ASCII characters without spaces.');
   }
   number('llm', 'temperature', 'Temperature', 0, 1);
-  number('llm', 'topP', 'Top P', 0.01, 1);
+  number('llm', 'topP', 'Word choice (Top P)', 0.01, 1);
   number('llm', 'maxTokens', 'Maximum output tokens', 1, 32768, true);
   number('tts', 'speechRate', 'Speaking speed', -50, 100, true);
-  number('voiceprint', 'score', 'Speaker matching threshold', 0, 100, true);
+  number('chat', 'autoSendPauseMs', 'Auto-send pause', 300, 5000, true);
   text('prompts', 'conversation', 'Conversation instructions', 12000);
   text('prompts', 'outline', 'Outline instructions', 6000);
   return output;

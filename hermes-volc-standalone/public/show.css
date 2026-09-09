@@ -1,0 +1,74 @@
+/* Teacher console and classroom show. Chrome reuses coach.css tokens; the
+   report panel follows the approved one-page specimen (course red C40000,
+   serif statements, gold hairlines). */
+
+.tc-app { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+.tc-header { display: flex; align-items: center; gap: 14px; padding: 14px clamp(16px, 3vw, 40px); border-bottom: 1px solid var(--gold-line); }
+.tc-header .wordmark { font-family: var(--serif); font-size: 28px; color: var(--red); }
+.tc-status { margin-right: auto; font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.tc-status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #7fa08a; }
+.tc-status.is-offline::before { background: var(--red); animation: tc-pulse 1.6s ease-in-out infinite; }
+.tc-actions { margin-left: auto; display: flex; gap: 8px; }
+.tc-actions button { min-height: 38px; padding: 7px 14px; border-radius: 99px; color: var(--teal); font-size: 14px; }
+@keyframes tc-pulse { 50% { opacity: .35; } }
+
+.tc-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tc-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.tc-scroll { flex: 1; min-height: 0; overflow-y: auto; width: min(760px, 100%); margin: 0 auto; padding: 22px clamp(16px, 3vw, 36px); }
+.tc-empty { color: var(--muted); text-align: center; padding: 80px 20px; }
+
+.tc-line { max-width: 86%; margin: 0 0 16px; padding: 12px 18px 14px; font-size: 16px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-teacher { margin-left: auto; background: var(--soft); border-radius: 18px 18px 4px 18px; }
+.tc-mimi { color: var(--ink); }
+
+.tc-sessions { flex: 1; overflow-y: auto; width: min(560px, 100%); margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+.tc-session { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 14px 18px; border-radius: 14px; }
+.tc-session strong { font-size: 15px; }
+.tc-session small { color: var(--muted); font-size: 12.5px; }
+.tc-session.is-current { border-color: #b6c9c4; background: var(--teal-soft, #eaf0ef); }
+
+.tc-composer { flex-shrink: 0; width: min(760px, 100%); margin: 0 auto; padding: 10px clamp(16px, 3vw, 36px) 18px; }
+.tc-composer textarea { width: 100%; min-height: 52px; max-height: 140px; border-radius: 18px; padding: 14px 18px; font-size: 16px; resize: none; }
+.tc-hint { margin: 8px 2px 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+.tc-error { margin: 0; padding: 10px 20px 16px; text-align: center; color: var(--red); font-size: 14px; }
+.tc-arm { position: absolute; right: 18px; bottom: 96px; z-index: 5; background: var(--red); color: #fff; border-color: var(--red); border-radius: 99px; min-height: 46px; padding: 10px 22px; animation: tc-pulse 2.4s ease-in-out infinite; }
+
+/* Show transcript */
+.tc-show { display: flex; flex-direction: column; gap: 16px; }
+.tc-trace { border-top: 1px solid var(--gold-line); padding-top: 14px; }
+.tc-trace-step { display: flex; align-items: center; gap: 10px; margin: 8px 0; color: var(--muted); font-size: 15px; opacity: .5; transition: opacity .3s; }
+.tc-trace-step.is-active { opacity: 1; color: var(--ink); }
+.tc-trace-step.is-done { opacity: 1; color: var(--teal); }
+.tc-trace-dot { width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line); flex-shrink: 0; }
+.tc-trace-step.is-active .tc-trace-dot { border-color: var(--teal); animation: tc-pulse 1s ease-in-out infinite; }
+.tc-trace-step.is-done .tc-trace-dot { background: var(--teal); border-color: var(--teal); }
+.tc-trace-step.is-done .tc-trace-dot::after { content: "✓"; color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+.tc-trace-done { color: var(--teal); font-size: 14px; margin: 6px 0; }
+.tc-report-card { border: 1px solid var(--gold-line); border-radius: 16px; padding: 16px 20px; }
+.tc-report-card-title { font-family: var(--serif); font-weight: 400; font-size: 22px; color: #c40000; margin: 8px 0 10px; }
+.tc-report-card-line { font-family: var(--serif); font-size: 15px; color: var(--muted); margin: 4px 0; }
+.tc-report-card-line .tc-mark { color: #c40000; border-bottom: 2px solid #c40000; padding-bottom: 1px; }
+
+/* Desktop: chat left, report panel right */
+.is-wide .tc-body { flex-direction: row; }
+.is-wide .tc-chat { flex: 0 0 42%; border-right: 1px solid var(--gold-line); }
+.is-wide .tc-scroll { width: 100%; }
+.is-wide .tc-panel { flex: 1; min-width: 0; overflow-y: auto; padding: clamp(34px, 6vh, 64px) clamp(28px, 4vw, 56px); }
+
+/* Report panel — the approved one-page specimen */
+.tc-kicker { color: #9b6a15; font-size: clamp(11px, 1vw, 13px); letter-spacing: .24em; margin: 0 0 14px; }
+.tc-title { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 3.6vw, 54px); color: #c40000; margin: 0 0 10px; line-height: 1.1; }
+.tc-case { padding: clamp(14px, 2.6vh, 24px) 0; }
+.tc-case + .tc-case { border-top: 1px solid var(--gold-line); }
+.tc-sentence { font-family: var(--serif); font-size: clamp(18px, 1.8vw, 25px); line-height: 1.6; margin: 0; }
+.tc-revised { margin-top: 10px; }
+.tc-sentence .tc-mark { color: #c40000; text-decoration: line-through; text-decoration-thickness: 2px; }
+.tc-revised .tc-mark { color: #c40000; border-bottom: 2px solid #c40000; text-decoration: none; padding-bottom: 1px; }
+.tc-note { margin: 12px 0 0; color: var(--muted); font-size: clamp(13px, 1.2vw, 16px); }
+.tc-method-title { font-family: var(--serif); font-weight: 400; font-size: clamp(28px, 2.8vw, 42px); color: #c40000; margin: clamp(26px, 5vh, 44px) 0 8px; padding-top: clamp(20px, 4vh, 36px); border-top: 1px solid var(--gold-line); }
+.tc-method { list-style: none; margin: 0; padding: 0; counter-reset: tc-step; }
+.tc-method li { display: flex; align-items: baseline; gap: clamp(14px, 1.6vw, 22px); padding: clamp(10px, 1.8vh, 16px) 0; font-family: var(--serif); font-size: clamp(19px, 2vw, 27px); }
+.tc-method li + li { border-top: 1px solid var(--gold-line); }
+.tc-method li::before { content: counter(tc-step) "."; counter-increment: tc-step; font-family: var(--serif); color: #c40000; }
+
+@media (prefers-reduced-motion: reduce) { .tc-status.is-offline::before, .tc-trace-step.is-active .tc-trace-dot, .tc-arm { animation: none; } }

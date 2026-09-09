@@ -159,3 +159,14 @@
 .admin-panel-heading h2 { color: var(--ink); letter-spacing: -.03em; }
 .admin-nav { min-width: 0; }
 .admin-nav button { white-space: normal; }
+
+/* The teacher controls use the same single-column phone layout. */
+.admin-page { max-width: 480px; padding-inline: 16px; }
+.admin-layout { display: block; padding-block: 16px; }
+.admin-nav { flex-direction: row; flex-wrap: wrap; margin-bottom: 24px; }
+.admin-nav button { flex: 1; justify-content: center; min-height: 48px; }
+.admin-nav p { display: none; }
+.admin-setting-row, .admin-grid, .three-fields, .admin-prompt-layout { grid-template-columns: minmax(0,1fr); gap: 16px; }
+.admin-save { padding: 12px 0 max(16px,env(safe-area-inset-bottom)); display: block; }
+.admin-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.admin-dialog { width: min(456px,calc(100vw - 24px)); padding: 16px; }

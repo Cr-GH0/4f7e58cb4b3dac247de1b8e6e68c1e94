@@ -1,0 +1,50 @@
+{
+  "_readme": "课前演出内容。sentences 里用 *词* 标出改动处（原句的错词、改后句的对应词）。traceSteps 是工具轨迹的固定文案；narration 可用《呈现产物与旁白提示词.md》里的提示词从当堂报告内容生成。改完在后台 Admin settings 里点 Regenerate show audio 重新合成语音。",
+  "teacherLines": {
+    "acknowledged": "好的，我正在整理报告，请在桌面端查看。",
+    "desktopOffline": "桌面端未连接，请先打开大屏页面。",
+    "alreadyDone": "本场已完成，请新开对话再发起。"
+  },
+  "ack": "收到。",
+  "traceSteps": [
+    "正在翻看大家的练习",
+    "正在把值得注意的地方记在小本本上",
+    "正在对比两位同学的句子",
+    "正在挑出最典型的两处",
+    "正在教训不听话的语法",
+    "正在写出修改后的样子",
+    "正在把要点排成一页报告"
+  ],
+  "report": {
+    "title": "Worth noting",
+    "cases": [
+      {
+        "original": "Zheng He *go* to the Western Seas seven times and *bring* Chinese culture to other countries.",
+        "revised": "Zheng He *went* to the Western Seas seven times and *brought* Chinese culture to other countries.",
+        "note": "历史叙述用一般过去时。"
+      },
+      {
+        "original": "*The* mutual learning *help* us *to know* the world.",
+        "revised": "Mutual learning *helps* us *understand* the world *better*.",
+        "note": "泛指不加 the；单数主语动词加 s。"
+      }
+    ],
+    "method": {
+      "title": "Build Your Story",
+      "steps": [
+        "Tell the case clearly",
+        "Show the exchange and influence",
+        "Make the mutual learning clear",
+        "Connect it to the text",
+        "End with a reflection"
+      ]
+    }
+  },
+  "narration": [
+    { "id": "intro", "text": "好的，我确实找到了值得大家注意的典型错误。下面结合两位同学的例子来说明。" },
+    { "id": "case1", "text": "第一位同学的例子里，两个动词都在叙述十五世纪的航行——历史叙述的默认时态是一般过去时，went、brought 分别是 go、bring 的过去式。我们把它改成了下面的样子，改动只涉及时态，句子的其余部分保持原样。" },
+    { "id": "case2", "text": "第二位同学的例子里，mutual learning 是泛指概念，不需要定冠词；作主语时动词用第三人称单数 helps。help somebody do something 中的 to 可以省略，直接接原形更自然；know 换成 understand，因为句义是理解世界，better 让比较落到实处。" },
+    { "id": "method", "text": "大家在接下来的写作和讲述任务中，可以按这五步走——先把案例说清楚，再讲交流和影响，点出互鉴在哪里，连回课文的原则，最后落在你们自己的态度上。Make it clear to your international listeners." }
+  ],
+  "voice": { "speaker": "", "speechRate": 0 }
+}

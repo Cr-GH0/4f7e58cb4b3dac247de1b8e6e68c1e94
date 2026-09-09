@@ -1,12 +1,54 @@
-import { GROUP_STORAGE_KEY, reduceSubtitle, correctSpeaker } from './group-session.js';
+// Subtitle reduction and speaker correction live here since the group era
+// ended; they serve every conversation.
+
+/** @param {any[]} lines @param {any} data @param {{taskId:string,botUserId:string}} context */
+export function reduceSubtitle(lines, data, context) {
+  if (!data || typeof data !== "object" || typeof data.userId !== "string") return lines;
+  const role = data.userId === context.botUserId ? "hermes" : "student";
+  const text = typeof data.text === "string" ? data.text.trim() : "";
+  const round = Number.isInteger(data.roundId) ? data.roundId : null;
+  const seq = Number.isInteger(data.sequence) ? data.sequence : null;
+  const baseKey = `${context.taskId}:${data.userId}:${round ?? `unmatched_${lines.length}`}`;
+  const candidates = lines.filter(l => l.key === baseKey || l.key.startsWith(baseKey + ':segment_'));
+  const latest = candidates[candidates.length - 1];
+  let key = latest?.key ?? baseKey;
+  // A finalized utterance followed by a new interim one starts a new segment.
+  if (role === 'student' && latest?.paragraph && data.paragraph !== true && text && seq !== null && seq > latest.sequence) key = `${baseKey}:segment_${seq}`;
+  const index = lines.findIndex(l => l.key === key);
+  const old = index >= 0 ? lines[index] : null;
+  if (!text && !old) return lines;
+  if (old && role === "student" && seq !== null && seq < old.sequence) return lines;
+  if (old?.paragraph && role === "student" && data.paragraph !== true && text) return lines;
+  // Room subtitles carry no speaker identity: typed input owns attribution,
+  // and a manual correction keeps whatever speaker it assigned.
+  const fragments = { ...(old?.fragments ?? {}) };
+  if (role === "hermes" && text) fragments[seq ?? Object.keys(fragments).length] = text;
+  const line = {
+    ...old, key, taskId: context.taskId, role, userId: data.userId, roundId: round,
+    sequence: seq === null ? (old?.sequence ?? -1) + 1 : Math.max(seq, old?.sequence ?? -1),
+    text: old?.textCorrected ? old.text : role === "hermes" ? Object.keys(fragments).sort((a,b) => Number(a)-Number(b)).map(k => fragments[k]).join(" ") : text || old?.text || "",
+    fragments, paragraph: data.paragraph === true || old?.paragraph === true,
+    speakerId: old?.corrected ? old.speakerId : null,
+    corrected: old?.corrected ?? false,
+    timestamp: old?.timestamp ?? new Date().toISOString(),
+  };
+  const next = [...lines];
+  if (index >= 0) next[index] = line; else next.push(line);
+  return next;
+}
+
+/** @param {any[]} lines @param {string} key @param {string|null} speakerId */
+export function correctSpeaker(lines, key, speakerId) {
+  return lines.map(l => l.key === key && l.role === "student" ? { ...l, speakerId, corrected: true } : l);
+}
 
 export const WORKSPACE_KEY = 'hermes.conversations.v2';
-const id = prefix => `${prefix}_${crypto.randomUUID().replaceAll('-', '').slice(0, 28)}`;
-export const newPerson = () => ({ memberId: id('p'), name: '', voiceprintId: '', deviceId: '' });
+const id = prefix => `${prefix}_${Array.from(crypto.getRandomValues(new Uint8Array(14)), b => b.toString(16).padStart(2, '0')).join('')}`;
+export const newPerson = () => ({ memberId: id('p'), name: '' });
 
-export function newConversation(mode = 'solo') {
-  const people = Array.from({ length: mode === 'group' ? 3 : 1 }, newPerson);
-  return { id: id('c'), mode, people, participantIds: people.map(p => p.memberId), lines: [], drafts: {}, revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+export function newConversation() {
+  const person = newPerson();
+  return { id: id('c'), people: [person], participantIds: [person.memberId], lines: [], drafts: {}, revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
 
 export function newWorkspace() {
@@ -18,29 +60,18 @@ export const participants = conversation => conversation.participantIds.map(id =
 export const personName = (conversation, personId) => {
   const person = conversation.people.find(p => p.memberId === personId);
   if (!person) return 'Unassigned';
-  if (person.name) return person.name;
-  return conversation.mode === 'solo' ? 'You' : `Member ${conversation.people.indexOf(person) + 1}`;
+  return person.name || 'You';
 };
 
 export function readWorkspace(storage) {
   const raw = storage.getItem(WORKSPACE_KEY);
-  if (raw) {
-    const value = JSON.parse(raw);
-    if (value.version !== 2 || !Array.isArray(value.conversations) || !value.conversations.length || !value.conversations.some(c => c.id === value.currentId)) throw new Error('Saved conversations could not be read. Export your data before continuing.');
-    for (const c of value.conversations) {
-      if (!['solo', 'group'].includes(c.mode) || !Array.isArray(c.people) || !Array.isArray(c.participantIds) || !Array.isArray(c.lines) || !c.drafts || c.participantIds.length !== (c.mode === 'solo' ? 1 : 3) || c.participantIds.some(id => !c.people.some(p => p.memberId === id))) throw new Error('Saved conversation data is incomplete. Export your data before continuing.');
-    }
-    return value;
+  if (!raw) return newWorkspace();
+  const value = JSON.parse(raw);
+  if (value.version !== 2 || !Array.isArray(value.conversations) || !value.conversations.length || !value.conversations.some(c => c.id === value.currentId)) throw new Error('Saved conversations could not be read. Export your data before continuing.');
+  for (const c of value.conversations) {
+    if (!Array.isArray(c.people) || !Array.isArray(c.participantIds) || c.participantIds.length !== 1 || !Array.isArray(c.lines) || !c.drafts || c.participantIds.some(id => !c.people.some(p => p.memberId === id))) throw new Error('Saved conversation data is incomplete. Export your data before continuing.');
   }
-  const legacy = storage.getItem(GROUP_STORAGE_KEY);
-  if (!legacy) return newWorkspace();
-  const old = JSON.parse(legacy);
-  if (old.version !== 1 || !Array.isArray(old.members) || old.members.length !== 3 || !Array.isArray(old.lines)) throw new Error('Older conversations could not be read. Export your data before continuing.');
-  const conversation = newConversation('group');
-  const mapping = new Map(old.members.map((p, i) => [p.memberId, conversation.people[i].memberId]));
-  conversation.people = old.members.map((p, i) => ({ ...p, memberId: conversation.people[i].memberId }));
-  conversation.lines = old.lines.map(line => ({ ...line, speakerId: mapping.get(line.speakerId) ?? null, seenSpeakers: (line.seenSpeakers ?? []).map(id => mapping.get(id)).filter(Boolean) }));
-  return { version: 2, currentId: conversation.id, conversations: [conversation] };
+  return value;
 }
 
 export function updatePerson(conversation, personId, changes) {
@@ -52,6 +83,17 @@ export function replacePerson(conversation, personId) {
   if (!conversation.participantIds.includes(personId)) throw new Error('This person is not in the current conversation.');
   const person = newPerson();
   return { ...conversation, people: [...conversation.people, person], participantIds: conversation.participantIds.map(id => id === personId ? person.memberId : id), revision: conversation.revision + 1, updatedAt: new Date().toISOString() };
+}
+
+/** The signed-in account owns the single member of every conversation. */
+export function attachAccount(conversation, account) {
+  if (!account) return conversation;
+  const previousId = conversation.participantIds[0], memberId = `student_${account.id}`;
+  const owner = { memberId, name: account.name };
+  return { ...conversation, participantIds: [memberId], people: [owner],
+    lines: conversation.lines.map(line => ({ ...line, speakerId: line.speakerId === previousId ? memberId : line.speakerId, targetPersonId: line.targetPersonId === previousId ? memberId : line.targetPersonId })),
+    drafts: Object.fromEntries(Object.entries(conversation.drafts).map(([key, value]) => [key === previousId ? memberId : key, value])),
+  };
 }
 
 function invalidateDrafts(conversation, people) {
@@ -71,9 +113,8 @@ export function correctText(conversation, key, text) {
   return { ...conversation, lines: conversation.lines.map(l => l.key === key ? { ...l, originalText: l.originalText ?? l.text, text: text.trim(), textCorrected: true } : l), drafts: invalidateDrafts(conversation, [line.speakerId]), revision: conversation.revision + 1, updatedAt: new Date().toISOString() };
 }
 
-export function receiveSubtitle(conversation, data, session, options = {}) {
-  const context = { ...session, members: participants(conversation), solo: conversation.mode === 'solo', enrollmentPersonId: options.enrollmentPersonId };
-  const lines = reduceSubtitle(conversation.lines, data, context);
+export function receiveSubtitle(conversation, data, session) {
+  const lines = reduceSubtitle(conversation.lines, data, session);
   return { ...conversation, lines, revision: conversation.revision + 1, updatedAt: new Date().toISOString() };
 }
 
@@ -81,28 +122,17 @@ export function addText(conversation, text, personId) {
   return { ...conversation, lines: [...conversation.lines, { key: id('text'), role: 'student', text: text.trim(), speakerId: personId, paragraph: true, corrected: true, source: 'text', timestamp: new Date().toISOString() }], revision: conversation.revision + 1, updatedAt: new Date().toISOString() };
 }
 
+/** One compatibility-mode exchange: the recognized recording and Mimi's reply. */
+export function addTalkExchange(conversation, personId, studentText, replyText) {
+  const stamp = new Date().toISOString();
+  const lines = [...conversation.lines];
+  if (studentText?.trim()) lines.push({ key: id('talk'), role: 'student', text: studentText.trim(), speakerId: personId, paragraph: true, corrected: true, source: 'talk', timestamp: stamp });
+  if (replyText?.trim()) lines.push({ key: id('talk'), role: 'hermes', text: replyText.trim(), speakerId: 'hermes', paragraph: true, source: 'talk', timestamp: stamp });
+  return { ...conversation, lines, revision: conversation.revision + 1, updatedAt: stamp };
+}
+
 export function saveDraft(conversation, personId, text, status = 'draft') {
   return { ...conversation, drafts: { ...conversation.drafts, [personId]: { text, status, sourceRevision: conversation.revision } }, revision: conversation.revision + 1, updatedAt: new Date().toISOString() };
-}
-
-export function extractIntroducedName(text) {
-  const chinese = text.match(/(?:我叫|我的名字(?:叫|是))\s*([\p{Script=Han}·]{2,8})(?=[，。！、\s]|$)/u);
-  if (chinese) return chinese[1];
-  const english = text.match(/(?:[Mm]y name is|[Yy]ou can call me|I'm|I am)\s+([A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*)?)(?=[,.!，。\s]|$)/u);
-  if (english && !/^(a|an|going|interested|happy|here|from|talking|thinking|not|ready|sorry|sure|glad|fine)$/i.test(english[1])) return english[1];
-  return '';
-}
-
-const addressed = /^(?:(?:hey|hi|hello|okay|ok)[,，\s]+)?(?:mimi\b|米米|咪咪)[,，:：\s]*/i;
-const waitIntent = /^(?:please\s+)?(?:just listen\b|wait(?: a (?:moment|minute))?\b|let(?:'s| us) discuss\b|we(?:'ll| will) discuss\b|我们先讨论|先听我们说|先听我说|先别回答|先不要回答|等一下|暂停回答)/i;
-
-export function responseDecision(mode, text, speakerId, engagement) {
-  const callsCoach = addressed.test(text.trim());
-  const content = text.trim().replace(addressed, '');
-  if (waitIntent.test(content) && (mode === 'solo' || callsCoach || engagement === speakerId || engagement === 'next')) return { action: 'listen', engagement: null, text: content };
-  if (callsCoach || engagement === 'next') return { action: 'respond', engagement: mode === 'group' ? null : speakerId ?? null, text: content || 'The student called you. Ask briefly what they would like help with.' };
-  if (mode === 'solo' && engagement !== null) return { action: 'respond', engagement, text: content };
-  return { action: 'record', engagement: mode === 'group' ? null : engagement, text: content };
 }
 
 export function conversationContext(conversation) {
@@ -124,5 +154,5 @@ export function exportConversation(conversation, personId = null) {
   const lines = conversation.lines.filter(l => personId === 'unknown' ? l.role === 'student' && !l.speakerId : !personId || l.speakerId === personId || l.targetPersonId === personId);
   const text = lines.map(l => `${l.role === 'hermes' ? 'Mimi' : personName(conversation, l.speakerId)}${l.paragraph ? '' : ' (incomplete)'}\n${l.text}`).join('\n\n');
   const drafts = Object.entries(conversation.drafts).filter(([id]) => !personId || id === personId).map(([id, d]) => `${personName(conversation, id)} · Outline${d.status === 'needs_review' ? ' (transcript changed; review needed)' : ''}\n${d.text}`).join('\n\n');
-  return `Mimi · ${conversation.mode === 'solo' ? 'Solo' : 'Group of 3'} transcript\n${conversation.createdAt}\n\n${text}${drafts ? `\n\n${drafts}` : ''}`;
+  return `Mimi · conversation transcript\n${conversation.createdAt}\n\n${text}${drafts ? `\n\n${drafts}` : ''}`;
 }
