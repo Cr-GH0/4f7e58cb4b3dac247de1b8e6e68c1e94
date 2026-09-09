@@ -55,7 +55,8 @@ for (const [k, v] of Object.entries(CFG)) {
 
 const showHandler = createShowHandler({
   store: showStore, students, secret: CFG.appKey, password: process.env.HERMES_ADMIN_PASSWORD,
-  settings: async () => (await settingsStore.current()).settings, speech: readSpeechCredentials(),
+  settings: async () => (await settingsStore.current()).settings, speech: readSpeechCredentials(), arkKey: readArkKey(),
+  loadSources: async () => ({ prompt: await readFile(join(__dirname, 'show-narration-prompt.md'), 'utf8'), html: await readFile(join(PUBLIC_DIR, 'practice-report.html'), 'utf8') }),
 });
 
 // ---------------------------------------------------------------------------

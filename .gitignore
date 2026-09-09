@@ -43,3 +43,7 @@ tmp/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local conversation notes
+/会话完整记录_交接文档.md
+/内容验收Goal_0909.01.md

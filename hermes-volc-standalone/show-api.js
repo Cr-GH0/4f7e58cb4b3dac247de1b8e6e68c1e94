@@ -1,14 +1,13 @@
 // Classroom show — the teacher triggers a staged performance from a phone
 // session; the desktop page (same teacher account, wide layout) polls the
-// state endpoint and performs: ack, tool trace, report, narration. All content
-// is prepared beforehand in show-content.json; nothing here reads student
-// conversations. Create one handler per server so the desktop heartbeat lives
-// for the process lifetime.
+// state endpoint and performs: ack, tool trace, report, narration. The report
+// is prepared; each performance generates its own explanation and matching
+// speech. This route does not read student conversations.
 import { readTicket } from './admin-security.js';
 import { currentStudent, TEACHER_NAMES } from './student-api.js';
 import { synthesizeSpeech } from './public/talk-api.js';
+import { createNarrationGenerator } from './show-narration.js';
 
-const DESKTOP_ONLINE_MS = 3000;
 // Behind a reverse proxy the browser's Origin is the public https domain while
 // the request URL may be rebuilt from internal Host values. Compare hosts,
 // accepting every host identity the proxy chain provides.
@@ -29,8 +28,8 @@ const originAllowed = (request, url) => {
   return hosts.has(originHost);
 };
 
-export function createShowHandler({ store, students, secret, password, settings, speech, fetcher = fetch }) {
-  let lastDesktopSeen = 0;
+export function createShowHandler({ store, students, secret, password, settings, speech, arkKey, loadSources, fetcher = fetch }) {
+  const narrator = loadSources ? createNarrationGenerator({ store, settings, speech, arkKey, loadSources, fetcher }) : null;
   return async function showRequest(request) {
     const url = new URL(request.url), path = url.pathname;
     const headers = { 'Cache-Control': 'no-store' };
@@ -50,6 +49,7 @@ export function createShowHandler({ store, students, secret, password, settings,
         if (!originAllowed(request, url)) return json({ error: 'Submit changes from Mimi Admin settings.' }, 403);
         if (!await requireAdmin()) return json({ error: 'Sign in to Admin settings first.' }, 401);
         const content = await store.loadContent();
+        if (content.narrationMode === 'dynamic') return json({ error: 'Narration is generated automatically for each new report.' }, 409);
         if (!speech) return json({ error: 'Narration needs the speech app credentials (VOLC_SPEECH_APP_ID / VOLC_SPEECH_ACCESS_TOKEN).' }, 503);
         const configured = await settings();
         const tts = {
@@ -70,7 +70,7 @@ export function createShowHandler({ store, students, secret, password, settings,
           }
         }
         if (failures.length) return json({ error: 'Some narration segments failed. The previous audio set was kept untouched — try again.', failures }, 502);
-        await store.writeAudioAll(synthesized);
+        await store.writeAudioAll(synthesized, content);
         return json({ ok: true, segments: synthesized.map(x => ({ id: x.id, ok: true })) });
       }
 
@@ -84,38 +84,58 @@ export function createShowHandler({ store, students, secret, password, settings,
         const conversationId = typeof input.conversationId === 'string' ? input.conversationId.trim() : '';
         const text = typeof input.text === 'string' ? input.text.trim().slice(0, 500) : '';
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(conversationId) || !text) return json({ error: 'Say something first.' }, 400);
-        // The desktop proves it is alive by polling /api/show/state.
-        if (Date.now() - lastDesktopSeen > DESKTOP_ONLINE_MS) return json({ reply: (await store.loadContent()).teacherLines.desktopOffline });
         const result = await store.trigger(conversationId, text);
+        if (result.busy) return json({ reply: 'The report is still playing.' });
         if (!result.created) return json({ reply: (await store.loadContent()).teacherLines.alreadyDone });
+        if (narrator) void narrator.ensure(result.data);
         return json({ reply: (await store.loadContent()).teacherLines.acknowledged, version: result.data.version });
       }
       if (path === '/api/show/state' && request.method === 'GET') {
-        lastDesktopSeen = Date.now();
         const state = await store.state();
+        const content = await store.loadContent();
+        if (narrator && state.active && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
         return json({
           version: state.version, active: state.active, triggerText: state.triggerText,
-          lastSegment: state.lastSegment, startedAt: state.startedAt, audioReady: await store.audioReady(),
+          lastSegment: state.lastSegment, checkpoint: state.checkpoint, startedAt: state.startedAt, audioReady: content.narrationMode === 'dynamic' ? state.performance?.status === 'ready' : await store.audioReady(),
+          narrationStatus: state.performance?.status, narrationError: state.performance?.error,
+          contentRevision: await store.contentRevision?.(),
         });
       }
       if (path === '/api/show/progress' && request.method === 'POST') {
         const input = await request.json().catch(() => ({}));
+        if (input.checkpoint) {
+          const p = input.checkpoint;
+          const content = await store.loadContent();
+          const limit = p.phase === 'trace' ? content.traceSteps.length : p.phase === 'narration' ? (content.narrationMode === 'dynamic' ? 4 : content.narration.length) : 1;
+          if (!Number.isInteger(input.version) || !['ack', 'trace', 'narration', 'done'].includes(p.phase) || !Number.isInteger(p.index) || p.index < 0 || p.index >= limit || !Number.isFinite(p.offset) || p.offset < 0 || p.offset > 3600) return json({ error: 'Invalid progress.' }, 400);
+          if (content.narrationMode === 'dynamic' && p.phase === 'done') {
+            const current = await store.state();
+            if (current.version === input.version && current.active && (current.performance?.status !== 'ready' || current.checkpoint?.phase !== 'narration' || current.checkpoint.index !== 3)) return json({ error: 'The spoken explanation has not finished.' }, 409);
+          }
+          if (!store.saveCheckpoint) return json({ error: 'The classroom show requires the Node server.' }, 503);
+          await store.saveCheckpoint(input.version, { phase: p.phase, index: p.index, offset: p.offset });
+          return json({ ok: true });
+        }
         if (!Number.isInteger(input.version) || !Number.isInteger(input.segment) || input.segment < 0) return json({ error: 'Invalid progress.' }, 400);
         await store.saveProgress(input.version, input.segment);
         // The desktop reports one segment past the last when the show ends.
         try {
           const content = await store.loadContent();
-          if (input.segment >= content.narration.length) await store.finish(input.version);
+          if (input.segment >= (content.narrationMode === 'dynamic' ? 4 : content.narration.length)) await store.finish(input.version);
         } catch { /* content problems must not block progress reporting */ }
         return json({ ok: true });
       }
       if (path === '/api/show/content' && request.method === 'GET') {
-        return json(await store.loadContent());
+        const content = await store.loadContent();
+        const state = await store.state();
+        if (url.searchParams.has('version') && Number(url.searchParams.get('version')) !== state.version) return json({ error: 'This report has been replaced by a newer session.' }, 409);
+        return json(content.narrationMode === 'dynamic' ? { ...content, version: state.version, contentRevision: await store.contentRevision?.(), narration: state.performance?.narration ?? [], narrationStatus: state.performance?.status ?? 'pending', narrationError: state.performance?.error, audioReady: state.performance?.status === 'ready' } : content);
       }
       const audioMatch = path.match(/^\/api\/show\/audio\/([a-z0-9-]+)$/);
       if (audioMatch && request.method === 'GET') {
-        const bytes = await store.readAudio(audioMatch[1]);
-        if (!bytes) return json({ error: 'Narration audio is not available. Generate it in Admin settings.' }, 404);
+        const version = Number(url.searchParams.get('version'));
+        const bytes = version ? await store.readPerformanceAudio?.(version, audioMatch[1]) : await store.readAudio(audioMatch[1]);
+        if (!bytes) return json({ error: 'This narration segment is not available yet.' }, 404);
         return new Response(bytes, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
       }
       return json({ error: 'Show action not found.' }, 404);

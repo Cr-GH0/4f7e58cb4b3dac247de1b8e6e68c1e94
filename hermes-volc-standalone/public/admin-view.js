@@ -44,7 +44,7 @@ export function mountAdmin(host) {
       <details class="admin-advanced" data-detail="advanced"><summary>Advanced settings<span>Response tuning, speaker recognition, and custom IDs</span></summary><div class="admin-advanced-content"><h3>Response tuning</h3><p class="admin-help">Tune variation and output limits. To request shorter or longer replies, describe your preference in Coach instructions.</p><div class="admin-grid three-fields">${field('llm.temperature', 'Variation (Temperature)', 'min="0" max="1" step="0.01"', 'Lower values give more consistent wording. Higher values add variety.')}${field('llm.topP', 'Word choice (Top P)', 'min="0.01" max="1" step="0.01"', 'Lower values favor more likely word choices.')}${field('llm.maxTokens', 'Maximum output tokens', 'min="1" max="32768" step="1"', 'Caps reply length in model tokens, which differ from words.')}</div>
       <h3>Conversation input</h3><p class="admin-help">Typed input sends itself after a pause (phones use voice keyboards). Adjust the pause to fit how long people need to finish a sentence.</p>${field('chat.autoSendPauseMs', 'Auto-send pause (ms)', 'min="300" max="5000" step="1"', 'Lower sends sooner but can fire on mid-sentence pauses. Default: 1200.')}
       <details data-detail="manual"><summary>Enter model IDs manually</summary><p class="admin-help">Use a model not yet in the list or a custom endpoint.</p><div class="admin-grid"><div class="admin-field"><label for="llm.target">Connection type</label><select id="llm.target" data-setting="llm.target"><option value="model" ${edit.llm.target === 'model' ? 'selected' : ''}>Model</option><option value="endpoint" ${edit.llm.target === 'endpoint' ? 'selected' : ''}>Custom endpoint</option></select></div>${field('llm.model', 'Model or endpoint ID', 'maxlength="256" spellcheck="false"', '', 'text')}${field('asr.resourceId', 'Speech recognition resource ID', 'maxlength="256" spellcheck="false"', '', 'text', 'manual-')}${field('tts.resourceId', 'Speech synthesis resource ID', 'maxlength="256" spellcheck="false"', '', 'text', 'manual-')}${field('tts.speaker', 'Voice ID', 'maxlength="256" spellcheck="false"', '', 'text')}</div></details></div></details>
-      <section class="admin-setting-row"><div><h3>Classroom show audio</h3><p>Pre-generate the “收到” line and report narration from show-content.json on the server. Regenerate after editing that file.</p></div><div class="admin-control"><button type="button" data-admin="show-audio" ${busy ? 'disabled' : ''}>${busy === 'show-audio' ? 'Synthesizing…' : 'Regenerate show audio'}</button></div></section>`;
+      <section class="admin-setting-row"><div><h3>Report narration</h3><p>Each new report request generates an explanation and speech automatically, using the saved model and voice.</p></div></section>`;
   }
   function promptsPanel() {
     const conversation = prompt === 'conversation';
@@ -166,15 +166,6 @@ export function mountAdmin(host) {
     }
     if (action === 'undo') { edit = structuredClone(saved.settings); error = ''; message = 'Changes discarded.'; stopAudio(); render(); return; }
     if (action === 'refresh') { await loadCatalog(true); return; }
-    if (action === 'show-audio') {
-      busy = 'show-audio'; error = ''; render();
-      try {
-        const result = await api('../admin/show-audio', 'POST', {});
-        message = `Show audio regenerated (${result.segments.length} segments).`;
-      } catch (e) { error = e.message; }
-      busy = ''; render();
-      return;
-    }
     if (action === 'logout' && dirty()) { error = 'You have unsaved changes. Save or discard them before signing out.'; render(); return; }
     if (action === 'logout') {
       try { busy = true; render(); await api('logout', 'POST', {}); stopAudio(); saved = null; edit = null; catalog = null; message = ''; }

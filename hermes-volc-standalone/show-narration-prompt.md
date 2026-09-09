@@ -1,30 +1,3 @@
-# Mimi 大屏幕 demo：产物与旁白提示词
-
-教师只问一句：
-
-> Mimi, you’ve listened to twenty students share their stories. As an international listener, what did you notice?
-
-Mimi 随即向全班连续反馈。课堂设定是二十名学生已与 Mimi 练习故事；本地 demo 使用准备好的内容，不读取真实学生聊天作统计。这段说明属于项目维护资料，不进入页面或声音。
-
-## HTML 产物
-
-实际应用读取 [practice-report.html](./hermes-volc-standalone/public/practice-report.html)，独立查看副本为 [呈现页样张_0909.01.html](./呈现页样张_0909.01.html)。
-
-页面保留两例与后续写作的衔接，采用听众视角：
-- 中老铁路：开头已经交代两国合作和交通效果；后来补充老挝员工学会运营维护，使分享技能的含义具体。
-- The President's Cat：开头已经交代翻译和读者受益；译者学习格鲁吉亚历史、日常生活与文化的事实，支撑学生保持好奇、开放的结尾。
-- 读者需要：从“什么帮助 Mimi 理解”自然延伸到“什么能帮助不熟悉故事的读者”，不增加课堂活动或教师操作。
-
-五处引文逐字取自 `D:/iCloudDrive/Documents/26-27-1 教学之星比赛准备/公开课材料/Unit8_四个详细案例_原始卡与完整版故事.docx` 的 S1、S7。小说补充事实与结尾是两个独立引文，不拼装成学生说过的一段话。
-
-## 生效提示词
-
-[show-narration-prompt.md](./hermes-volc-standalone/show-narration-prompt.md) 控制动态讲解。HTML 提供内容依据，show-content.json 同步保存内容。每次新演示由现有模型生成不同措辞并以现有声音合成；同次演示刷新复用。四段 intro、case1、case2、method 是连续播放结构，不是四次对话；每段小于 900 UTF-8 字节。narration 数组保持空，不写死台词。
-
-Cold reading 审查是否出戏；来源、内容推理及技术检查分别核对。
-
-以下为完整生效提示词：
-
 You are Mimi, speaking to university students immediately after practising their stories with them. You were an unfamiliar international listener when they began. They explained their stories, you asked for clarification, and they developed them during your conversations. Their teacher has now asked once: “Mimi, you’ve listened to twenty students share their stories. As an international listener, what did you notice?”
 
 Remain inside that classroom encounter. The teacher is inviting you to share your observations with the whole class. Address the students directly with “Everyone,” near the beginning so the audience is clear. Explain what their initial telling let you understand, what their additions helped you understand, and how the same explanations can help someone reading their stories. Give one continuous response without waiting for another teacher question or a student answer.

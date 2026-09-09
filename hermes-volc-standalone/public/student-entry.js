@@ -1,5 +1,6 @@
 import { mountCoach } from './coach-view.js';
 import { mountTeacherConsole } from './teacher-console.js';
+import { ShowAudio } from './show-audio.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const STUDENT_INITIAL_MARKUP = '<main class="student-entry"><span class="wordmark">Mimi</span><section><h1>Opening your account</h1><p role="status">Connecting to Mimi…</p></section></main>';
@@ -14,6 +15,7 @@ export function mountStudentEntry(host, options) {
   let rtcPromise;
   const loadRtc = () => { rtcPromise ??= options.loadRtc().catch(e => { rtcPromise = null; throw e; }); return rtcPromise; };
   let account = null, cleanup = null, destroyed = false;
+  const teacherAudio = new ShowAudio();
   let phase = 'loading', error = '', name = '', code = '', copied = false;
   const api = async (action, body) => {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 35000);
@@ -28,7 +30,7 @@ export function mountStudentEntry(host, options) {
     if (destroyed || !account) return;
     phase = 'conversation';
     if (account.role === 'teacher') {
-      cleanup = mountTeacherConsole(host, { account, storage: accountStorage(options.storage ?? globalThis.localStorage, account.id),
+      cleanup = mountTeacherConsole(host, { account, audio: teacherAudio, storage: accountStorage(options.storage ?? globalThis.localStorage, account.id),
         onRename: async value => { account = (await api('rename', { name: value })).account; return account; } });
       return;
     }
@@ -71,7 +73,11 @@ export function mountStudentEntry(host, options) {
   async function submit(event) {
     if (!event.target.matches('[data-entry-form="login"]')) return;
     event.preventDefault(); if (phase === 'signing-in') return;
-    code = new FormData(event.target).get('code'); phase = 'signing-in'; error = ''; render();
+    code = new FormData(event.target).get('code');
+    // Start the context inside the ordinary sign-in gesture, before the async
+    // login response. The teacher never gets a separate sound-enable step.
+    if (/^[a-z]/i.test(code)) void teacherAudio.arm().catch(() => {});
+    phase = 'signing-in'; error = ''; render();
     try { account = (await api('login', { code })).account; enter(); }
     catch (e) { error = e.message; phase = 'setup'; render(); }
   }
