@@ -60,7 +60,7 @@ class Context {
   constructor() { this.state = 'suspended'; this.currentTime = 0; this.destination = {}; this.events = new Map(); this.sources = []; }
   async resume() { this.state = 'running'; }
   async close() { this.state = 'closed'; }
-  async decodeAudioData() { return this.createBuffer(1, 30000, 1000); }
+  async decodeAudioData(data) { return this.createBuffer(1, data?.byteLength === 4 ? Math.round(new DataView(data).getFloat32(0, true) * 1000) : 30000, 1000); }
   createBuffer(numberOfChannels, length, sampleRate) {
     const channels = Array.from({ length: numberOfChannels }, () => new Float32Array(length));
     return { numberOfChannels, length, sampleRate, duration: length / sampleRate, getChannelData: index => channels[index] };
@@ -145,7 +145,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
   const work = { hidden: true }, steps = { innerHTML: '' }, note = { textContent: '' };
   const frameDoc = {
     getElementById: id => embeddedStyles.find(s => s.id === id), createElement: () => ({}), head: { append: s => embeddedStyles.push(s) },
-    scrollingElement: { scrollTop: 0 }, querySelectorAll: () => ['case1','case2'].map(id => ({ scrollIntoView: () => sectionVisits.push(id) })),
+    scrollingElement: { scrollTop: 0 }, querySelectorAll: () => ['case1','case2','method'].map(id => ({ textContent: 'The ' + id + ' explanation.', getClientRects: () => [1], scrollIntoView: () => sectionVisits.push(id) })),
     querySelector: () => ({ scrollIntoView: () => sectionVisits.push('method') }),
   };
   const report = {
@@ -187,18 +187,19 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
     calls.push(path);
     if (offline) throw new Error('offline');
     if (path === '/api/show/desktop/open') {
-      if (previousSession) Object.assign(snapshot, { active: false, dismissed: true, checkpoint: null });
-      return Response.json({ version: previousSession ? snapshot.version : 0, active: false, dismissed: true, checkpoint: null });
+      if (previousSession) Object.assign(snapshot, { version: snapshot.version + 1, active: false, dismissed: false, checkpoint: null });
+      return Response.json({ version: snapshot.version, active: false, preparing: true, dismissed: false, checkpoint: null });
     }
     if (path === '/api/show/progress') { progress.push(JSON.parse(options.body)); return Response.json({ ok: true }); }
     if (path === '/api/show/dismiss') { Object.assign(snapshot, { active: false, dismissed: true }); return Response.json({ ok: true }); }
     if (path === '/api/show/say') { calls.push(JSON.parse(options.body)); if (sayGate) await sayGate; return Response.json({ reply: 'I’m preparing the report.', version: 1 }); }
     if (path.startsWith('/api/show/state')) return Response.json(snapshot);
-    if (path.startsWith('/api/show/content')) return Response.json(generated);
-    if (path === '/api/show/opening' || path.startsWith('/api/show/audio/')) return new Response(new Uint8Array([1]));
+    if (path.startsWith('/api/show/content')) return Response.json({ ...generated, version: Number(new URL(path, 'http://fixture').searchParams.get('version')) });
+    if (path === '/api/show/opening' || path.startsWith('/api/show/audio/')) return new Response(new Float32Array([path.includes('intro') ? 6 : path.includes('case1') ? 14 : path.includes('case2') ? 19 : path.includes('method') ? 10.2 : 5]).buffer);
     return Response.json({});
   };
   const dispose = mountTeacherConsole(host, { storage });
+  if (!phone) void listeners.get('click')?.({ target: { closest: selector => selector === '[data-mimi-enter]' ? {} : null } });
   return { host, ctx, progress, memory, snapshot, report, notice, work, steps, note, returnButton, styles, sectionVisits, calls, embeddedStyles,
     stage: () => stage, frame: () => frame, writes: () => ({ reportWrites, hostWrites }), setContent: value => { generated = value; },
     offline: value => { offline = value; }, interact: () => listeners.get('keydown')?.(), releaseSay: () => releaseSay?.(),
@@ -213,7 +214,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
 test('idle desktop shows only the avatar, including in a narrow desktop window', async () => {
   const f = consoleFixture({ narrowDesktop: true });
   try {
-    await until(() => f.calls.includes('/api/show/state'), 'desktop listens for the phone');
+    await until(() => f.calls.some(p => typeof p === 'string' && p.startsWith('/api/show/state')), 'desktop listens for the phone');
     assert.equal(f.stage().dataset.phase, 'idle');
     assert.ok(f.host.innerHTML.includes('src="/mimi.png"'));
     assert.ok(!/<textarea|tc-chat|tc-header/.test(f.host.innerHTML));
@@ -233,7 +234,7 @@ test('phone retains auto-created sessions and sends the summary command without 
     assert.equal(sent.text, 'Please summarize the practice.');
     assert.ok(sent.conversationId);
     assert.ok(JSON.parse(f.memory.get('mimi.teacher.v1')).list[0].lines.length === 2);
-    assert.ok(!f.calls.includes('/api/show/state'));
+    assert.ok(!f.calls.some(p => typeof p === 'string' && p.startsWith('/api/show/state')));
     assert.equal(f.ctx.sources.length, 0);
   } finally { await f.cleanup(); }
 });
@@ -309,7 +310,9 @@ test('phone trigger speaks acknowledgement, shows four silent work stages, prese
     assert.deepEqual(f.writes(), { reportWrites: 1, hostWrites: 1 });
     assert.deepEqual(f.sectionVisits, ['case1','case2','method']);
     assert.ok(f.embeddedStyles[0].textContent.includes('padding-right:max'));
+    f.offline(true);
     f.click('[data-mimi-return]');
+    assert.equal(f.report.hidden, true, 'return is synchronous even without a network');
     await until(() => f.report.hidden, 'clicking the completed avatar returns to standby');
     assert.equal(f.stage(), stage, 'the same avatar remains mounted');
     assert.equal(f.stage().dataset.phase, 'idle');
@@ -319,13 +322,15 @@ test('phone trigger speaks acknowledgement, shows four silent work stages, prese
   } finally { await f.cleanup(); }
 });
 
-test('blocked audio keeps the full report and checkpoint, then resumes automatically', async () => {
+test('blocked audio cannot enter standby; entry gesture enables prepared playback', async () => {
   const f = consoleFixture({ blocked: true, snapshot: { version: 1, active: true, narrationStatus: 'ready', checkpoint: { phase: 'narration', index: 1, offset: 4.2 } } });
   try {
-    await until(() => f.stage().dataset.phase === 'paused', 'audio pause is represented accurately');
+    await pause(100);
+    assert.ok(!f.calls.includes('/api/show/desktop/open'), 'blocked audio cannot advertise classroom readiness');
     assert.equal(f.ctx.sources.length, 0);
     assert.ok(!f.progress.some(p => p.checkpoint.phase === 'done'));
     f.ctx.resume = async () => { f.ctx.state = 'running'; };
+    f.click('[data-mimi-enter]');
     await until(() => f.ctx.sources.length === 1, 'automatic retry resumes the saved position', 5500);
     assert.equal(f.ctx.sources[0].offset, 22);
     assert.equal(f.stage().dataset.phase, 'speaking');
@@ -375,7 +380,7 @@ test('opening the desktop retires completed and interrupted reports instead of r
       assert.equal(f.returnButton.hidden, true);
       assert.equal(f.ctx.sources.length, 0);
       assert.equal(f.memory.get('mimi.show.checkpoint.v2'), 'null');
-      assert.ok(!f.calls.some(p => p.startsWith('/api/show/content')), 'old report is not fetched');
+      assert.ok(!f.calls.some(p => p === '/api/show/content?version=7'), 'old report is not fetched');
       Object.assign(state, { version: 8, active: true, dismissed: false, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
       await until(() => f.ctx.sources.length === 1, 'the next phone command can start a new report');
       assert.equal(f.ctx.sources[0].offset, 0);

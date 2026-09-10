@@ -268,9 +268,10 @@ test('opening a desktop clears the previous performance and allows the next requ
     await store.trigger('old-request', 'Explain the report.');
     await store.saveCheckpoint(1, { phase: 'narration', index: 2, offset: 10 });
     await store.savePerformance(1, { status: 'generating' });
-    const reset = await store.openDesktop();
+    const reset = await store.openDesktop('desktop-owner');
     assert.equal(reset.active, false);
-    assert.equal(reset.dismissed, true);
+    assert.equal(reset.dismissed, false);
+    assert.equal(reset.preparing, true);
     assert.equal(reset.checkpoint, null);
     await store.savePerformance(1, { status: 'ready' });
     await store.saveCheckpoint(1, { phase: 'done', index: 0, offset: 0 });
@@ -280,4 +281,31 @@ test('opening a desktop clears the previous performance and allows the next requ
     assert.equal(next.data.version, 2);
     assert.deepEqual(next.data.checkpoint, { phase: 'ack', index: 0, offset: 0 });
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a live desktop owns its prepared round; second windows and late closes cannot reset it', async t => {
+  const f = await fixture('mimi-show-owner-');
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  try {
+    const source = { html: '<main>Current report</main>', prompt: 'Current instructions' };
+    const first = await f.store.openDesktop('first-desktop', source);
+    await f.store.savePerformance(first.version, { status: 'ready', narration });
+    assert.equal(await f.store.openDesktop('second-desktop', source), null);
+    assert.equal(await f.store.closeDesktop('second-desktop'), null);
+    assert.equal((await f.store.state()).performance.status, 'ready');
+    const trigger = await f.store.trigger('one-teacher-utterance', 'What did you notice?', { html: 'new', prompt: 'new' });
+    assert.equal(trigger.data.version, first.version, 'trigger reuses prepared audio and report');
+    assert.deepEqual(trigger.data.sources, source);
+    assert.deepEqual(trigger.data.performance.narration, narration);
+    now += 16000;
+    const replacement = await f.store.openDesktop('replacement-desktop', source);
+    assert.equal(replacement.version, first.version + 1);
+    assert.equal(replacement.active, false);
+    assert.equal(await f.store.closeDesktop('first-desktop'), null);
+    await f.store.savePerformance(first.version, { status: 'ready', narration });
+    assert.equal((await f.store.state()).performance, null);
+    const handler = createShowHandler({ store: f.store, students: f.students, secret: 'fixture' });
+    assert.equal((await caller(handler, f.cookie)('/api/show/dismiss', { version: replacement.version, desktopId: 'first-desktop' })).status, 409);
+  } finally { await f.cleanup(); }
 });

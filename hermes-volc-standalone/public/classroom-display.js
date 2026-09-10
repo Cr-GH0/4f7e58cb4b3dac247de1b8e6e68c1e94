@@ -1,4 +1,5 @@
 import { showPosition, showOffset } from './show-timing.js';
+import { focusReport } from './report-focus.js';
 import { signOut } from './sign-out.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -7,24 +8,37 @@ const CHECKPOINT_KEY = 'mimi.show.checkpoint.v2';
 // Keep the avatar mounted throughout: acknowledgement, work, report and return.
 export function mountClassroomDisplay(host, { storage, audio }) {
   let initialized = false, initializing = false, disposed = false, running = false, seen = 0, token = 0, preparedVersion = null;
+  const desktopId = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+  let entered = audio.armed, preparingAssets = false, readyVersion = null, pendingDismiss = null, polling = false;
+  let gateMessage = '进入课堂后，Mimi 会准备好声音和报告。';
   let snapshot = null, point = null, content = null, retryAt = 0, frameLoad = null, renderedVersion = null;
   let phase = 'idle', reportVisible = false, error = '', section = '', traceIndex = 0, traceDone = 0, preloadReport = false, completed = false, dismissing = false;
   const api = async (path, body) => {
+    if (path === '/api/show/state') path += '?desktopId=' + desktopId;
+    if (body) body = { ...body, desktopId };
     const response = await fetch(path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10000), headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error ?? 'Mimi could not complete this request.');
+    if (!response.ok) { const error = new Error(data.error ?? 'Mimi could not complete this request.'); error.lostDesktop = data.lostDesktop; throw error; }
     return data;
   };
   function render() {
     if (disposed) return;
     let stage = host.querySelector('[data-mimi-stage]');
     if (!stage) {
-      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><button type="button" class="mimi-stage__logout" data-mimi-logout>退出登录</button><p class="mimi-stage__logout-error" data-mimi-signout-error role="alert" hidden></p><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="img" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
+      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><button type="button" class="mimi-stage__logout" data-mimi-logout>退出登录</button><p class="mimi-stage__logout-error" data-mimi-signout-error role="alert" hidden></p><section class="mimi-entry" data-mimi-entry><p data-mimi-entry-text role="status"></p><button type="button" data-mimi-enter>进入课堂</button></section><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="img" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
       stage = host.querySelector('[data-mimi-stage]');
     }
     if (!stage) return;
     stage.classList.toggle('has-report', reportVisible);
     stage.dataset.phase = phase;
+    const gate = stage.querySelector('[data-mimi-entry]');
+    if (gate) {
+      gate.hidden = !gateMessage;
+      stage.querySelector('[data-mimi-entry-text]').textContent = gateMessage;
+      const enterButton = stage.querySelector('[data-mimi-enter]');
+      enterButton.hidden = entered && (initializing || preparingAssets);
+      enterButton.textContent = entered ? '重新准备' : '进入课堂';
+    }
     const settingsLink = stage.querySelector('[data-mimi-settings]');
     if (settingsLink) settingsLink.hidden = phase !== 'idle' || reportVisible;
     const presence = stage.querySelector('[data-mimi-presence]');
@@ -68,9 +82,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   function focusSection() {
     const doc = host.querySelector('[data-mimi-report-frame]')?.contentDocument;
     if (!doc) return;
-    if (section === 'intro') { doc.scrollingElement.scrollTop = 0; return; }
-    const target = section === 'case1' ? doc.querySelectorAll('.case')[0] : section === 'case2' ? doc.querySelectorAll('.case')[1] : section === 'method' ? doc.querySelector('.method') : null;
-    target?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    focusReport(doc, content?.narration.find(part => part.id === section));
   }
   function remember(next) {
     point = next;
@@ -99,11 +111,38 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   }
   async function dismiss() {
     if (!snapshot?.version || dismissing) return;
-    dismissing = true; render();
-    try { await api('/api/show/dismiss', { version: snapshot.version }); resetView({ ...snapshot, active: false, dismissed: true }); }
-    catch { error = 'Could not return to standby. Please try again.'; render(); }
-    finally { dismissing = false; render(); }
+    const version = snapshot.version;
+    pendingDismiss = version;
+    resetView({ ...snapshot, active: false, dismissed: true });
+    // The UI returns immediately, even offline. Polling retries the write and
+    // ignores that old performance until the server acknowledges dismissal.
+    void pollOnce();
   }
+  async function prepareClassroom(state) {
+    if (preparingAssets || disposed) return;
+    preparingAssets = true; gateMessage = '正在准备课堂…'; render();
+    const version = state.version;
+    try {
+      const deadline = Date.now() + 90000;
+      let next;
+      do {
+        next = await api('/api/show/content?version=' + version);
+        if (disposed || !entered || snapshot?.dismissed || snapshot?.version !== version) return;
+        if (next.narrationStatus === 'error') throw new Error(next.narrationError);
+        if (Date.now() > deadline) throw new Error('准备时间较长，请重新准备。');
+        if (!next.audioReady || !next.narration.length) await delay(700);
+      } while (!next.audioReady || !next.narration.length);
+      content = next; preloadReport = true; render();
+      await audio.prepareShow(content);
+      if (frameLoad) await Promise.race([frameLoad, delay(15000).then(() => { throw new Error('报告未能打开。'); })]);
+      if (disposed || !entered || snapshot?.dismissed || snapshot?.version !== version) return;
+      if (!audio.armed) throw new Error('请点击进入课堂以启用声音。');
+      preparedVersion = version; readyVersion = version; gateMessage = ''; render();
+    } catch (failure) {
+      if (!disposed) { gateMessage = failure.message || '课堂准备未完成，请重试。'; }
+    } finally { preparingAssets = false; render(); }
+  }
+
   async function retry() {
     if (running || dismissing || !snapshot) return;
     error = ''; render();
@@ -125,7 +164,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     phase = 'idle'; reportVisible = Boolean(content?.version === state.version && ['transition', 'narration', 'closing', 'done'].includes(start.phase));
     render();
     try {
-      content = await api('/api/show/content?version=' + state.version);
+      if (preparedVersion !== state.version) content = await api('/api/show/content?version=' + state.version);
       if (!alive()) return;
       if (content.dismissed) { resetView({ ...state, dismissed: true }); return; }
       if (start.phase === 'done') { reportVisible = true; phase = 'idle'; completed = true; render(); return; }
@@ -156,7 +195,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
       let displayed = '';
       const displayPosition = seconds => {
         if (!alive()) return;
-        const part = showPosition(seconds);
+        const part = showPosition(seconds, audio.timeline);
         if (part.phase === 'done') return; // Only the audio ended event enables return.
         const key = part.phase + ':' + part.index;
         if (key === displayed) return;
@@ -169,12 +208,12 @@ export function mountClassroomDisplay(host, { storage, audio }) {
         render();
         if (part.phase === 'narration') focusSection();
       };
-      await audio.play('show', showOffset(start), seconds => {
+      await audio.play('show', showOffset(start, audio.timeline), seconds => {
         if (!alive()) return;
-        const part = showPosition(seconds);
+        const part = showPosition(seconds, audio.timeline);
         if (part.phase !== 'done') checkpoint({ phase: part.phase, index: part.index, offset: part.offset });
       }, {
-        onStart: () => displayPosition(showOffset(start)),
+        onStart: () => displayPosition(showOffset(start, audio.timeline)),
         onPosition: displayPosition,
         onLevel: value => { if (alive()) level(value); },
         onEnd: () => { if (alive()) level(0); },
@@ -192,8 +231,14 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     } finally { if (alive()) running = false; }
   }
   async function pollOnce() {
-    if (disposed) return;
+    if (disposed || polling) return;
+    polling = true;
     try {
+      if (!entered) return;
+      if (pendingDismiss !== null) {
+        await api('/api/show/dismiss', { version: pendingDismiss });
+        pendingDismiss = null; initialized = false; readyVersion = null;
+      }
       if (!initialized) {
         if (initializing) return;
         initializing = true;
@@ -202,26 +247,30 @@ export function mountClassroomDisplay(host, { storage, audio }) {
           if (disposed) return;
           resetView(state);
           initialized = true;
+          void prepareClassroom(state);
         } finally { initializing = false; }
         return;
       }
       const state = await api('/api/show/state');
       if (disposed) return;
       if (state.dismissed && state.version >= seen) { if (snapshot?.version !== state.version || !snapshot?.dismissed) resetView(state); return; }
-      if (state.version > seen && !running) void run(state);
+      if (state.active && readyVersion === state.version && !snapshot?.active && !running && !completed) void run(state);
       else if (phase === 'paused' && !running && Date.now() >= retryAt && state.active && state.narrationStatus !== 'error') void run(state, point);
       else if (error === 'Reconnecting…') { error = ''; render(); }
       if (point && snapshot && !snapshot.dismissed) void api('/api/show/progress', { version: snapshot.version, checkpoint: point }).catch(() => {});
-    } catch { if (!running && !disposed) { error = 'Reconnecting…'; render(); } }
+    } catch (failure) { if (!disposed && (!running || failure.lostDesktop)) {
+      if (failure.lostDesktop) { initialized = false; entered = false; readyVersion = null; pendingDismiss = null; resetView({ ...snapshot, active: false, dismissed: true }); }
+      if (!initialized) gateMessage = failure.message;
+      else if (!pendingDismiss) error = 'Reconnecting…';
+      render();
+    } } finally { polling = false; }
   }
   async function poll() { while (!disposed) { await pollOnce(); await delay(700); } }
   const leaving = () => {
     if (disposed) return;
-    // Best effort on a normal close; the next open also resets server state,
-    // so crashes and browser session restoration cannot resurrect a report.
-    if (snapshot?.version && !snapshot.dismissed) {
-      void fetch('/api/show/dismiss', { method: 'POST', credentials: 'same-origin', keepalive: true,
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: snapshot.version }) }).catch(() => {});
+    if (initialized) {
+      void fetch('/api/show/desktop/close', { method: 'POST', credentials: 'same-origin', keepalive: true,
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ desktopId }) }).catch(() => {});
     }
     disposed = true; token++; audio.stop(); level(0);
   };
@@ -230,13 +279,26 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   window.addEventListener?.('pageshow', returned);
   const interact = () => { void arm(); };
   const click = async event => {
+    if (event.target.closest('[data-mimi-enter]')) {
+      await arm();
+      if (!audio.armed) { gateMessage = '声音尚未启用，请再次点击进入课堂。'; render(); return; }
+      entered = true; gateMessage = '正在准备课堂…'; render();
+      if (initialized && snapshot) {
+        try {
+          const state = await api('/api/show/state');
+          if (['error', 'ready'].includes(state.narrationStatus)) await api('/api/show/retry', { version: state.version });
+          void prepareClassroom(state);
+        } catch (failure) { gateMessage = failure.message; render(); }
+      } else void pollOnce();
+      return;
+    }
     const logout = event.target.closest('[data-mimi-logout]');
     if (logout) {
       if (logout.disabled) return;
       logout.disabled = true;
       const notice = host.querySelector('[data-mimi-signout-error]');
       notice.hidden = true;
-      try { await signOut({ beforeLeave: () => { disposed = true; token++; audio.stop(); } }); }
+      try { await signOut({ beforeLeave: leaving }); }
       catch { logout.disabled = false; notice.textContent = '暂时无法退出，请重试。'; notice.hidden = false; }
       return;
     }
@@ -246,6 +308,6 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   const visible = () => { if (!document.hidden) { void arm(); void pollOnce(); } };
   host.addEventListener('pointerdown', interact); host.addEventListener('keydown', interact); host.addEventListener('click', click);
   document.addEventListener('visibilitychange', visible);
-  render(); void arm(); void audio.prepareOpening().catch(() => {}); void poll();
-  return () => { disposed = true; token++; audio.stop(); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); window.removeEventListener?.('pagehide', leaving); window.removeEventListener?.('pageshow', returned); };
+  render(); void poll();
+  return () => { leaving(); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); window.removeEventListener?.('pagehide', leaving); window.removeEventListener?.('pageshow', returned); };
 }

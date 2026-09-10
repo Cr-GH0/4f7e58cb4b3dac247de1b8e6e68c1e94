@@ -87,8 +87,18 @@ export function createShowHandler({ store, students, secret, password, settings,
       if (!teacher) return json({ error: 'Sign in with the teacher account to use the classroom show.' }, 401);
 
       if (path === '/api/show/desktop/open' && request.method === 'POST') {
-        const state = await store.openDesktop();
-        return json({ version: state.version, active: false, dismissed: true, checkpoint: null });
+        const { desktopId } = await request.json();
+        if (typeof desktopId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(desktopId)) return json({ error: 'Invalid desktop session.' }, 400);
+        const state = await store.openDesktop(desktopId, await loadSources?.());
+        if (!state) return json({ error: '另一窗口正在使用大屏。关闭该窗口后即可进入。' }, 409);
+        if (narrator) void narrator.ensure(state);
+        warmOpening();
+        return json({ version: state.version, active: state.active, preparing: state.preparing, dismissed: state.dismissed, checkpoint: state.checkpoint });
+      }
+      if (path === '/api/show/desktop/close' && request.method === 'POST') {
+        const { desktopId } = await request.json();
+        await store.closeDesktop(desktopId);
+        return json({ ok: true });
       }
 
       if (path === '/api/show/editor') {
@@ -126,11 +136,13 @@ export function createShowHandler({ store, students, secret, password, settings,
       }
       if (path === '/api/show/state' && request.method === 'GET') {
         warmOpening();
-        const state = await store.state();
+        const desktopId = url.searchParams.get('desktopId');
+        const state = desktopId ? await store.touchDesktop(desktopId) : await store.state();
+        if (!state) return json({ error: '大屏会话已结束，请重新进入课堂。', lostDesktop: true }, 409);
         const content = await store.loadContent();
-        if (narrator && state.active && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
+        if (narrator && (state.active || state.preparing) && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
         return json({
-          version: state.version, active: state.active, dismissed: state.dismissed, triggerText: state.triggerText,
+          version: state.version, active: state.active, preparing: state.preparing, dismissed: state.dismissed, triggerText: state.triggerText,
           lastSegment: state.lastSegment, checkpoint: state.checkpoint, startedAt: state.startedAt, audioReady: content.narrationMode === 'dynamic' ? state.performance?.status === 'ready' : await store.audioReady(),
           narrationStatus: state.performance?.status, narrationError: state.performance?.error,
           contentRevision: await store.contentRevision?.(),
@@ -143,6 +155,8 @@ export function createShowHandler({ store, students, secret, password, settings,
       }
       if (['/api/show/dismiss', '/api/show/retry'].includes(path) && request.method === 'POST') {
         const input = await request.json();
+        const owner = (await store.state()).desktop;
+        if (owner && input.desktopId !== owner.id) return json({ error: 'This desktop does not own the report.', lostDesktop: true }, 409);
         if (!Number.isInteger(input.version)) return json({ error: 'Invalid report.' }, 400);
         if (path.endsWith('/retry') && !narrator) return json({ error: 'Mimi cannot prepare the explanation right now.' }, 503);
         const state = path.endsWith('/dismiss') ? await store.dismiss(input.version) : await store.retry(input.version);
@@ -152,6 +166,8 @@ export function createShowHandler({ store, students, secret, password, settings,
       }
       if (path === '/api/show/progress' && request.method === 'POST') {
         const input = await request.json().catch(() => ({}));
+        const owner = (await store.state()).desktop;
+        if (owner && input.desktopId !== owner.id) return json({ error: 'This desktop does not own the report.', lostDesktop: true }, 409);
         if (input.checkpoint) {
           const p = input.checkpoint;
           const content = await store.loadContent();

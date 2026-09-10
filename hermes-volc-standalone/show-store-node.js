@@ -80,7 +80,9 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       // mutation, so two concurrent says cannot both trigger.
       if (data.usedConversations.includes(conversationId)) return { created: false, data };
       if (data.active) return { created: false, busy: true, data };
-      data.version += 1;
+      const prepared = data.preparing && !data.dismissed;
+      if (!prepared) data.version += 1;
+      data.preparing = false;
       data.active = true;
       data.dismissed = false;
       data.conversationId = conversationId;
@@ -88,20 +90,43 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       data.startedAt = new Date().toISOString();
       data.lastSegment = 0;
       data.checkpoint = { phase: 'ack', index: 0, offset: 0 };
-      data.performance = null;
-      data.sources = sources && typeof sources.html === 'string' && typeof sources.prompt === 'string' ? structuredClone(sources) : null;
+      if (!prepared) data.performance = null;
+      if (!prepared) data.sources = sources && typeof sources.html === 'string' && typeof sources.prompt === 'string' ? structuredClone(sources) : null;
       data.usedConversations.push(conversationId);
       return { created: true, data };
     }),
-    openDesktop: () => mutate(data => {
-      // A fresh desktop page starts a new classroom session. Retire the old
-      // performance atomically, including unfinished background generation.
+    openDesktop: (desktopId, sources = null) => mutate(data => {
+      const now = Date.now();
+      if (data.desktop && data.desktop.id !== desktopId && data.desktop.expiresAt > now) return null;
+      // Repeated acquisition by the owner is idempotent; another live page
+      // cannot reset it. An expired/closed page always starts a fresh session.
+      if (data.desktop?.id === desktopId && data.desktop.expiresAt > now && !data.dismissed) {
+        data.desktop.expiresAt = now + 15000;
+        return data;
+      }
+      data.desktop = { id: desktopId, expiresAt: now + 15000 };
+      data.version += 1;
       data.active = false;
-      data.dismissed = true;
+      data.preparing = true;
+      data.dismissed = false;
+      data.triggerText = 'As a foreign listener, what have you noticed in the students’ sharing? Prepare your observations from this report.';
       data.checkpoint = null;
       data.lastSegment = 0;
       data.performance = null;
-      data.sources = null;
+      data.sources = sources ? structuredClone(sources) : null;
+      return data;
+    }),
+    touchDesktop: desktopId => mutate(data => {
+      if (data.desktop?.id !== desktopId) return null;
+      data.desktop.expiresAt = Date.now() + 15000;
+      return data;
+    }),
+    closeDesktop: desktopId => mutate(data => {
+      if (data.desktop?.id !== desktopId) return null;
+      data.desktop = null;
+      data.active = false;
+      data.preparing = false;
+      data.dismissed = true;
       return data;
     }),
     saveProgress: (version, segment) => mutate(data => {
@@ -128,15 +153,16 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       if (data.version !== version) return null;
       data.active = false;
       data.dismissed = true;
+      data.preparing = false;
       return data;
     }),
     retry: version => mutate(data => {
-      if (data.version !== version || !data.active || data.dismissed || data.performance?.status !== 'error') return null;
-      data.performance = { ...data.performance, status: 'pending', error: null };
+      if (data.version !== version || !(data.active || data.preparing) || data.dismissed || !['error', 'ready'].includes(data.performance?.status)) return null;
+      data.performance = data.performance.status === 'ready' ? { status: 'pending', error: null } : { ...data.performance, status: 'pending', error: null };
       return data;
     }),
     savePerformance: (version, patch) => mutate(data => {
-      if (data.version === version && data.active && !data.dismissed) data.performance = { ...data.performance, ...patch };
+      if (data.version === version && (data.active || data.preparing) && !data.dismissed) data.performance = { ...data.performance, ...patch };
       return data;
     }),
     async readOpening(key) {

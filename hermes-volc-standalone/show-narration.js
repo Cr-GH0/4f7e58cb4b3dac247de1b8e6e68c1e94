@@ -1,7 +1,7 @@
 import { completeReply, synthesizeSpeech } from './public/talk-api.js';
 
 export const NARRATION_IDS = ['intro', 'case1', 'case2', 'method'];
-const OUTPUT_FORMAT = `Playback format: return only a JSON object with a narration array of exactly four entries, using IDs intro, case1, case2, method in that order. These are consecutive parts of ONE spoken response, not four turns. The IDs are playback labels; follow the supplied report and speaking instructions for subject matter. Each entry has id and text. Text must be plain spoken English without Markdown, below 900 UTF-8 bytes per entry. This format controls delivery only; do not mention it aloud. TIMING: the spoken report has 49.2 seconds. This timing limit takes priority over any longer word counts above. Write 110–125 words TOTAL: about 14–16 for intro, 30–35 for case1, 43–48 for case2, and 23–26 for method. Keep the report's key relationships, compress examples instead of reading quotations, and finish each thought. Do not mention the time limit.`;
+const OUTPUT_FORMAT = `Playback format: return only a JSON object with a narration array of exactly four entries, using IDs intro, case1, case2, method in that order. These are consecutive parts of ONE spoken response, not four turns. The IDs are playback labels; follow the supplied report and speaking instructions for subject matter. Each entry has id, text, and anchor. The anchor is a short exact phrase copied from the report section being discussed, used to scroll that section into view; it is not spoken. Text must be plain spoken English without Markdown, below 900 UTF-8 bytes per entry. This format controls delivery only; do not mention it aloud. TIMING: the spoken report has 49.2 seconds. This timing limit takes priority over any longer word counts above. Write 110–125 words TOTAL. Use about 12 words for intro, 28 for case1, 40 for case2, and 20 for method. Keep intro to one short sentence and method to two short sentences. Avoid repeating an observation already made in another section. All four parts will use the same speaking pace. Keep the report's key relationships, compress examples instead of reading quotations, and finish each thought. Do not mention the time limit.`;
 
 export function reportText(html) {
   return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -18,7 +18,7 @@ export function parseNarration(raw) {
     if (item.id !== NARRATION_IDS[i] || typeof item.text !== 'string' || !item.text.trim()) throw new Error('Narration sections are invalid.');
     const text = item.text.trim();
     if (new TextEncoder().encode(text).length > 900 || /\p{Script=Han}/u.test(text)) throw new Error('Narration must be English and fit the speech service.');
-    return { id: item.id, text };
+    return { id: item.id, text, ...(typeof item.anchor === 'string' && item.anchor.trim() ? { anchor: item.anchor.trim().slice(0, 180) } : {}) };
   });
 }
 
@@ -48,8 +48,8 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
   }
   async function generate(snapshot) {
     let current = await store.state();
-    if (current.version !== snapshot.version || !current.active || current.dismissed || current.performance?.status === 'ready') return;
-    const alive = async () => { const s = await store.state(); return s.version === snapshot.version && s.active && !s.dismissed; };
+    if (current.version !== snapshot.version || !(current.active || current.preparing) || current.dismissed || current.performance?.status === 'ready') return;
+    const alive = async () => { const s = await store.state(); return s.version === snapshot.version && (s.active || s.preparing) && !s.dismissed; };
     const previous = current.performance;
     await store.savePerformance(snapshot.version, { status: 'generating', error: null });
     try {
@@ -67,7 +67,12 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
         };
         narration = await retryOnce(async () => {
           const result = parseNarration(await completeReply(body, arkKey, fetcher));
-          if (result.reduce((count, part) => count + part.text.split(/\s+/).length, 0) > 140) throw new Error('The explanation is too long for this presentation.');
+          const count = result.reduce((count, part) => count + part.text.split(/\s+/).length, 0);
+          if (count > 140) {
+            body.messages[0].content += `\nThe previous draft was too long (${count} words). For this revision, enforce section limits: intro 16 words, case1 32 words, case2 45 words, method 22 words. Count only text, not anchors. Compress the wording while preserving meaning.`;
+            body.messages.push({ role: 'assistant', content: JSON.stringify({ narration: result }) }, { role: 'user', content: `That draft contains ${count} spoken words. Rewrite it in 110–125 words total, maximum 140. Preserve the factual relationships and four IDs; compress repeated explanations. Return the same JSON format with anchors.` });
+            throw new Error('The explanation is too long for this presentation.');
+          }
           return result;
         });
       }

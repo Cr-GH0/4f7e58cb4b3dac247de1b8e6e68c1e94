@@ -1,5 +1,5 @@
 import { fitSpeech } from './fit-speech.js';
-import { SHOW_TIMELINE, SHOW_TIMING } from './show-timing.js';
+import { SHOW_TIMELINE, SHOW_TIMING, makeTimeline } from './show-timing.js';
 // Decode the complete set before advertising readiness. Playback never advances
 // on an error; the caller retains the checkpoint until a real ended event.
 export class ShowAudio {
@@ -42,7 +42,16 @@ export class ShowAudio {
   }
   async prepareShow(content) {
     await Promise.all([this.prepareOpening(), this.prepare(content, { opening: false })]);
-    const spoken = SHOW_TIMELINE.filter(part => part.audioId);
+    const durations = content.narration.map(part => this.buffers.get(part.id).duration);
+    const natural = durations.reduce((sum, duration) => sum + duration, 0);
+    const pace = natural / 49.2;
+    if (pace < 0.8 || pace > 1.35) throw new Error('讲解长度不适合自然语速，请重新准备。');
+    // Allocate the report slots by natural speech length. Every section uses
+    // one pace; the opening, six-second work and total duration stay fixed.
+    const slots = durations.map(duration => Math.round(duration / natural * 49200) / 1000);
+    slots[3] = Math.round((49.2 - slots.slice(0, 3).reduce((sum, duration) => sum + duration, 0)) * 1000) / 1000;
+    this.timeline = makeTimeline(slots);
+    const spoken = this.timeline.filter(part => part.audioId);
     const rate = this.buffers.get('ack').sampleRate;
     const channels = Math.max(...spoken.map(part => this.buffers.get(part.audioId).numberOfChannels));
     const combined = this.context.createBuffer(channels, Math.round(SHOW_TIMING.total * rate), rate);

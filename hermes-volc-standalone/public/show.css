@@ -157,3 +157,7 @@
 .mimi-stage__logout { position: absolute; z-index: 4; left: 94px; bottom: 22px; padding: 8px 12px; min-height: 36px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
 .mimi-stage__logout:hover, .mimi-stage__logout:focus-visible { color: var(--red-dark); background: var(--soft); }
 .mimi-stage__logout-error { position: absolute; z-index: 4; left: 24px; bottom: 64px; margin: 0; padding: 8px 12px; background: var(--paper); color: var(--red-dark); font-size: 13px; }
+
+.mimi-entry{position:absolute;z-index:8;left:50%;top:72%;transform:translateX(-50%);text-align:center;color:#455568;width:min(90%,520px)}
+.mimi-entry[hidden]{display:none}.mimi-entry p{font:16px/1.6 system-ui,sans-serif;margin:0 0 16px}
+.mimi-entry button{border:0;border-radius:24px;padding:12px 28px;background:#244d62;color:white;font:500 16px system-ui,sans-serif;cursor:pointer}
