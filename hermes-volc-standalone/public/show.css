@@ -3,7 +3,7 @@
 .tc-app {
   --report-red: #c40000;
   --ui-muted: #58636b;
-  height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+  height: calc(100 * var(--mimi-vh)); display: flex; flex-direction: column; overflow: hidden;
   background: var(--paper); color: var(--ink);
 }
 .tc-app [hidden] { display: none !important; }
@@ -51,7 +51,7 @@
   --motion-travel: 700ms;
   --motion-ease: cubic-bezier(.22,.68,.16,1);
   --stage-accent: var(--red);
-  position: relative; isolation: isolate; width: 100%; height: 100dvh;
+  position: relative; isolation: isolate; width: 100%; height: calc(100 * var(--mimi-vh));
   overflow: hidden; background: var(--paper); color: var(--ink);
 }
 .mimi-stage__report { position: absolute; inset: 0; background: var(--paper); animation: mimi-report-appear 480ms ease-out both; }
@@ -63,13 +63,13 @@
   position: absolute; z-index: 2; top: 0; left: 0;
   width: var(--avatar-size); aspect-ratio: 1; pointer-events: none;
   transform-origin: 0 0;
-  transform: translate(calc(50vw - var(--avatar-size)/2), calc(50dvh - var(--avatar-size)/2));
+  transform: translate(calc(50vw - var(--avatar-size)/2), calc(calc(50 * var(--mimi-vh)) - var(--avatar-size)/2));
   transition: transform var(--motion-travel) var(--motion-ease);
 }
 .mimi-stage.has-report .mimi-presence {
   /* Compensate for the smaller avatar so motion stays visible on the report. */
   --idle-lift: -22px;
-  transform: translate(calc(100vw - var(--avatar-size)*var(--avatar-scale) - var(--avatar-right)), calc(100dvh - var(--avatar-size)*var(--avatar-scale) - var(--avatar-bottom))) scale(var(--avatar-scale));
+  transform: translate(calc(100vw - var(--avatar-size)*var(--avatar-scale) - var(--avatar-right)), calc(calc(100 * var(--mimi-vh)) - var(--avatar-size)*var(--avatar-scale) - var(--avatar-bottom))) scale(var(--avatar-scale));
 }
 .mimi-presence__breath { width: 100%; height: 100%; animation: mimi-breathe 3.4s ease-in-out infinite; }
 .mimi-presence__portrait {
@@ -120,10 +120,10 @@
 
 .mimi-stage [hidden] { display: none !important; }
 .mimi-stage[data-phase="working"] .mimi-presence {
-  transform: translate(calc(50vw - var(--avatar-size)*.62/2), calc(24dvh - var(--avatar-size)*.62/2)) scale(.62);
+  transform: translate(calc(50vw - var(--avatar-size)*.62/2), calc(calc(24 * var(--mimi-vh)) - var(--avatar-size)*.62/2)) scale(.62);
 }
 .mimi-stage[data-phase="working"] .mimi-presence__orbit::after { opacity: 1; animation: mimi-orbit 1.65s linear infinite; }
-.mimi-work { position: absolute; top: 40dvh; left: 50%; transform: translateX(-50%); width: min(640px, calc(100% - 64px)); font-family: var(--sans); }
+.mimi-work { position: absolute; top: calc(40 * var(--mimi-vh)); left: 50%; transform: translateX(-50%); width: min(640px, calc(100% - 64px)); font-family: var(--sans); }
 .mimi-work ol { list-style: none; margin: 0; padding: 0; }
 .mimi-work li { display: flex; gap: 16px; align-items: center; min-height: 58px; font-size: clamp(17px, 1.5vw, 22px); transition: color 240ms, opacity 240ms; }
 .mimi-work li.is-done { color: #657465; }
@@ -137,10 +137,10 @@
 .mimi-stage__error p { margin: 0 0 8px; }
 .mimi-stage__error button { margin-right: 8px; min-height: 40px; padding: 6px 12px; font-size: 14px; }
 @media (max-height: 600px) {
-  .mimi-work { top: 35dvh; }
+  .mimi-work { top: calc(35 * var(--mimi-vh)); }
   .mimi-work li { min-height: 34px; font-size: 16px; }
   .mimi-work__note { margin-top: 12px; font-size: 14px; }
-  .mimi-stage[data-phase="working"] .mimi-presence { transform: translate(calc(50vw - var(--avatar-size)*.4/2), calc(20dvh - var(--avatar-size)*.4/2)) scale(.4); }
+  .mimi-stage[data-phase="working"] .mimi-presence { transform: translate(calc(50vw - var(--avatar-size)*.4/2), calc(calc(20 * var(--mimi-vh)) - var(--avatar-size)*.4/2)) scale(.4); }
 }
 @media (prefers-reduced-motion: reduce) { .mimi-work__mark { animation: none !important; } }
 

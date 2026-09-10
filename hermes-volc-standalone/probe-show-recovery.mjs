@@ -259,3 +259,25 @@ test('retry without a narrator reports unavailable and leaves the recoverable er
     assert.equal(state.performance.error, 'Generation failed.');
   } finally { await f.cleanup(); }
 });
+
+
+test('opening a desktop clears the previous performance and allows the next request', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mimi-desktop-open-'));
+  try {
+    const store = fileShowStore({ statePath: join(dir, 'state.json'), contentPath: new URL('./show-content.json', import.meta.url), audioDir: join(dir, 'audio') });
+    await store.trigger('old-request', 'Explain the report.');
+    await store.saveCheckpoint(1, { phase: 'narration', index: 2, offset: 10 });
+    await store.savePerformance(1, { status: 'generating' });
+    const reset = await store.openDesktop();
+    assert.equal(reset.active, false);
+    assert.equal(reset.dismissed, true);
+    assert.equal(reset.checkpoint, null);
+    await store.savePerformance(1, { status: 'ready' });
+    await store.saveCheckpoint(1, { phase: 'done', index: 0, offset: 0 });
+    assert.equal((await store.state()).performance, null, 'late generation cannot restore a closed session');
+    const next = await store.trigger('next-request', 'Explain the report.');
+    assert.equal(next.created, true);
+    assert.equal(next.data.version, 2);
+    assert.deepEqual(next.data.checkpoint, { phase: 'ack', index: 0, offset: 0 });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

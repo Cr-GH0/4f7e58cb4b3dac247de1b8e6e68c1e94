@@ -127,7 +127,7 @@ test('missing audio fails preparation instead of falling back to silent timers',
   audio.dispose();
 });
 
-function consoleFixture({ snapshot = { version: 0, active: false }, saved = null, phone = false, narrowDesktop = false, blocked = false, holdSay = false, runtimeContent } = {}) {
+function consoleFixture({ snapshot = { version: 0, active: false }, saved = null, phone = false, narrowDesktop = false, blocked = false, holdSay = false, runtimeContent, previousSession = false } = {}) {
   const originals = Object.fromEntries(['window', 'document', 'matchMedia', 'fetch'].map(k => [k, globalThis[k]]));
   const ctx = new Context();
   if (blocked) ctx.resume = async () => { throw new Error('Autoplay blocked'); };
@@ -186,6 +186,10 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
   globalThis.fetch = async (path, options = {}) => {
     calls.push(path);
     if (offline) throw new Error('offline');
+    if (path === '/api/show/desktop/open') {
+      if (previousSession) Object.assign(snapshot, { active: false, dismissed: true, checkpoint: null });
+      return Response.json({ version: previousSession ? snapshot.version : 0, active: false, dismissed: true, checkpoint: null });
+    }
     if (path === '/api/show/progress') { progress.push(JSON.parse(options.body)); return Response.json({ ok: true }); }
     if (path === '/api/show/dismiss') { Object.assign(snapshot, { active: false, dismissed: true }); return Response.json({ ok: true }); }
     if (path === '/api/show/say') { calls.push(JSON.parse(options.body)); if (sayGate) await sayGate; return Response.json({ reply: 'I’m preparing the report.', version: 1 }); }
@@ -345,7 +349,7 @@ test('trace resume continues from the saved stage without replaying acknowledgem
   } finally { await f.cleanup(); }
 });
 
-test('stale local completion cannot skip an unplayed report; fresh local offsets are preserved', async () => {
+test('a fresh desktop clears stale local completion and offsets before accepting a new round', async () => {
   const f = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'narration', index: 0, offset: 2 } }, saved: { version: 1, checkpoint: { phase: 'done', index: 0, offset: 0 } } });
   try {
     await until(() => f.ctx.sources.length === 1, 'unplayed narration starts');
@@ -355,18 +359,26 @@ test('stale local completion cannot skip an unplayed report; fresh local offsets
   const resumed = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'narration', index: 1, offset: 2 } }, saved: { version: 1, checkpoint: { phase: 'narration', index: 1, offset: 6.5 } } });
   try {
     await until(() => resumed.ctx.sources.length === 1, 'local checkpoint restored');
-    assert.equal(resumed.ctx.sources[0].offset, 24.3);
+    assert.equal(resumed.ctx.sources[0].offset, 19.8, 'the previous browser session cannot advance the new round');
   } finally { await resumed.cleanup(); }
 });
 
-test('completed report refresh keeps the artifact with an idle corner avatar and no replay', async () => {
-  const f = consoleFixture({ snapshot: { version: 1, active: false, checkpoint: { phase: 'done', index: 0, offset: 0 } } });
-  try {
-    await until(() => f.frame(), 'report is restored');
-    assert.equal(f.stage().dataset.phase, 'idle');
-    assert.ok(f.stage().classList.contains('has-report'));
-    assert.equal(f.ctx.sources.length, 0);
-    assert.equal(f.report.hidden, false);
-    for (const segment of content.narration) assert.ok(!f.host.innerHTML.includes(segment.text));
-  } finally { await f.cleanup(); }
+test('opening the desktop retires completed and interrupted reports instead of restoring them', async () => {
+  for (const active of [false, true]) {
+    const state = { version: 7, active, dismissed: false, checkpoint: { phase: active ? 'narration' : 'done', index: 0, offset: 2 } };
+    const f = consoleFixture({ previousSession: true, snapshot: state, saved: { version: 7, checkpoint: { phase: 'narration', index: 2, offset: 8 } } });
+    try {
+      await until(() => f.calls.includes('/api/show/desktop/open'), 'fresh desktop resets the server session');
+      await pause(40);
+      assert.equal(f.stage().dataset.phase, 'idle');
+      assert.equal(f.report.hidden, true);
+      assert.equal(f.returnButton.hidden, true);
+      assert.equal(f.ctx.sources.length, 0);
+      assert.equal(f.memory.get('mimi.show.checkpoint.v2'), 'null');
+      assert.ok(!f.calls.some(p => p.startsWith('/api/show/content')), 'old report is not fetched');
+      Object.assign(state, { version: 8, active: true, dismissed: false, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
+      await until(() => f.ctx.sources.length === 1, 'the next phone command can start a new report');
+      assert.equal(f.ctx.sources[0].offset, 0);
+    } finally { await f.cleanup(); }
+  }
 });

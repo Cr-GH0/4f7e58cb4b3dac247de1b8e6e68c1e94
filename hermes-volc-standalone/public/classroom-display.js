@@ -6,7 +6,7 @@ const CHECKPOINT_KEY = 'mimi.show.checkpoint.v2';
 
 // Keep the avatar mounted throughout: acknowledgement, work, report and return.
 export function mountClassroomDisplay(host, { storage, audio }) {
-  let disposed = false, running = false, seen = 0, token = 0, preparedVersion = null;
+  let initialized = false, initializing = false, disposed = false, running = false, seen = 0, token = 0, preparedVersion = null;
   let snapshot = null, point = null, content = null, retryAt = 0, frameLoad = null, renderedVersion = null;
   let phase = 'idle', reportVisible = false, error = '', section = '', traceIndex = 0, traceDone = 0, preloadReport = false, completed = false, dismissing = false;
   const api = async (path, body) => {
@@ -194,6 +194,17 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   async function pollOnce() {
     if (disposed) return;
     try {
+      if (!initialized) {
+        if (initializing) return;
+        initializing = true;
+        try {
+          const state = await api('/api/show/desktop/open', {});
+          if (disposed) return;
+          resetView(state);
+          initialized = true;
+        } finally { initializing = false; }
+        return;
+      }
       const state = await api('/api/show/state');
       if (disposed) return;
       if (state.dismissed && state.version >= seen) { if (snapshot?.version !== state.version || !snapshot?.dismissed) resetView(state); return; }
@@ -204,6 +215,19 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     } catch { if (!running && !disposed) { error = 'Reconnecting…'; render(); } }
   }
   async function poll() { while (!disposed) { await pollOnce(); await delay(700); } }
+  const leaving = () => {
+    if (disposed) return;
+    // Best effort on a normal close; the next open also resets server state,
+    // so crashes and browser session restoration cannot resurrect a report.
+    if (snapshot?.version && !snapshot.dismissed) {
+      void fetch('/api/show/dismiss', { method: 'POST', credentials: 'same-origin', keepalive: true,
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: snapshot.version }) }).catch(() => {});
+    }
+    disposed = true; token++; audio.stop(); level(0);
+  };
+  const returned = event => { if (event.persisted) location.reload(); };
+  window.addEventListener?.('pagehide', leaving);
+  window.addEventListener?.('pageshow', returned);
   const interact = () => { void arm(); };
   const click = async event => {
     const logout = event.target.closest('[data-mimi-logout]');
@@ -223,5 +247,5 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   host.addEventListener('pointerdown', interact); host.addEventListener('keydown', interact); host.addEventListener('click', click);
   document.addEventListener('visibilitychange', visible);
   render(); void arm(); void audio.prepareOpening().catch(() => {}); void poll();
-  return () => { disposed = true; token++; audio.stop(); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); };
+  return () => { disposed = true; token++; audio.stop(); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); window.removeEventListener?.('pagehide', leaving); window.removeEventListener?.('pageshow', returned); };
 }

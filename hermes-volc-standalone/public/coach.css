@@ -1,3 +1,5 @@
+:root { --mimi-vh: 1vh; --mimi-svh: 1vh; }
+@supports (height: 1dvh) { :root { --mimi-vh: 1dvh; --mimi-svh: 1svh; } }
 :root {
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
@@ -7,7 +9,7 @@
   --teal: #48636d; --teal-soft: #eaf0ef; --gold-line: #dfd3bd; --line: #e5e0d7;
   --serif: "Georgia", "Times New Roman", serif;
 }
-.student-entry { min-height: 100svh; padding: max(24px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(32px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left)); }
+.student-entry { min-height: calc(100 * var(--mimi-svh)); padding: max(24px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(32px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left)); }
 .student-entry > .wordmark { display: block; text-align: center; color: var(--ink); text-decoration: none; margin-bottom: 32px; }
 .student-entry > section { max-width: 480px; margin: 0 auto; }
 .student-entry h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(28px,7vw,36px); }
@@ -33,7 +35,7 @@ h1, h2, h3, p { margin-top: 0; }
 p { line-height: 1.65; }
 [hidden] { display: none !important; }
 [inert] { pointer-events: none; }
-.mimi-app, .main-surface { height: var(--app-height,100dvh); min-height: 0; }
+.mimi-app, .main-surface { height: var(--app-height,calc(100 * var(--mimi-vh))); min-height: 0; }
 .mimi-app { overflow: hidden; }
 .main-surface { display: flex; flex-direction: column; }
 .app-header { min-height: 80px; flex-shrink: 0; margin: 0 clamp(20px,4vw,80px); padding: max(10px,env(safe-area-inset-top)) 0 10px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; border-bottom: 1px solid var(--gold-line); }
@@ -46,7 +48,7 @@ p { line-height: 1.65; }
 .conversation-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; padding: 16px 8px 20px; }
 .empty-conversation { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 8px 0; }
 .empty-conversation h1 { font-family: var(--serif); font-size: clamp(28px,2.5vw,36px); line-height: 1.25; font-weight: 400; letter-spacing: -.035em; margin: 30px 0 0; text-wrap: balance; }
-.mimi-portrait { position: relative; width: clamp(180px,28dvh,272px); aspect-ratio: 1; flex-shrink: 0; border-radius: 50%; padding: 7px; border: 1px solid var(--gold-line); background: var(--paper); box-shadow: 0 10px 30px #59452b06; transition: box-shadow .12s linear, border-color .2s; }
+.mimi-portrait { position: relative; width: clamp(180px,calc(28 * var(--mimi-vh)),272px); aspect-ratio: 1; flex-shrink: 0; border-radius: 50%; padding: 7px; border: 1px solid var(--gold-line); background: var(--paper); box-shadow: 0 10px 30px #59452b06; transition: box-shadow .12s linear, border-color .2s; }
 .mimi-portrait img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 .mimi-portrait[data-phase="listening"] { border-color: #8caaab; box-shadow: 0 0 0 var(--input-spread,2px) #48636d12; }
 .mimi-portrait:is([data-phase="listening"],[data-phase="speaking"])::before { content: ""; position: absolute; inset: -8px; border: 1px solid #97b0b2; border-radius: 50%; pointer-events: none; }
@@ -110,7 +112,7 @@ p { line-height: 1.65; }
 .text-composer { padding: 8px; border: 1px solid var(--line); border-radius: 28px; background: #fff; box-shadow: 0 3px 12px #463b2c05; transition: border-color .18s, box-shadow .18s; }
 .text-composer:focus-within { border-color: #97a9ac; box-shadow: 0 0 0 3px #48636d0a; }
 .composer-entry { display: flex; align-items: flex-end; gap: 10px; }
-.text-composer textarea { display: block; flex: 1; min-width: 0; min-height: 44px; max-height: min(160px,24dvh); border: 0; border-radius: 0; background: transparent; resize: none; padding: 10px 0 10px 12px; font-size: 16px; line-height: 24px; scrollbar-width: thin; overflow-y: hidden; }
+.text-composer textarea { display: block; flex: 1; min-width: 0; min-height: 44px; max-height: min(160px,calc(24 * var(--mimi-vh))); border: 0; border-radius: 0; background: transparent; resize: none; padding: 10px 0 10px 12px; font-size: 16px; line-height: 24px; scrollbar-width: thin; overflow-y: hidden; }
 .text-composer textarea:focus-visible { outline: none; }
 .text-composer textarea::placeholder { color: #7b8387; opacity: 1; }
 .send-button { width: 44px; min-height: 44px; height: 44px; padding: 10px; flex-shrink: 0; border: 0; border-radius: 50%; background: var(--red); color: #fff; }
@@ -151,7 +153,7 @@ p { line-height: 1.65; }
   .wordmark { font-size: 28px; }
   .conversation-space { padding: 0 20px; }
   .welcome-view .conversation-space { padding-bottom: max(44px,env(safe-area-inset-bottom)); }
-  .mimi-portrait { width: clamp(168px,28dvh,252px); }
+  .mimi-portrait { width: clamp(168px,calc(28 * var(--mimi-vh)),252px); }
   .empty-conversation h1 { font-size: 30px; max-width: 300px; margin-top: 28px; }
   .start-button { width: min(280px,100%); min-height: 56px; }
   .conversation-scroll { padding: 10px 0 18px; }
@@ -194,10 +196,10 @@ button { font-size: 15px; }
 button:active:not(:disabled) { opacity: .78; }
 .app-header { min-height: 64px; }
 .conversation-space { width: 100%; padding-inline: max(16px,env(safe-area-inset-left)) max(16px,env(safe-area-inset-right)); }
-.mimi-portrait { width: clamp(128px,26dvh,184px); }
+.mimi-portrait { width: clamp(128px,calc(26 * var(--mimi-vh)),184px); }
 .empty-conversation h1 { font-size: 28px; margin-top: 24px; }
 .start-button { width: 100%; min-width: 0; }
-.side-panel, .side-panel-left { left: 50%; right: auto; transform: translateX(-50%); width: min(480px,100%); height: var(--app-height,100dvh); bottom: auto; border: 0; }
+.side-panel, .side-panel-left { left: 50%; right: auto; transform: translateX(-50%); width: min(480px,100%); height: var(--app-height,calc(100 * var(--mimi-vh))); bottom: auto; border: 0; }
 .panel-body { flex: 1; padding-bottom: max(24px,env(safe-area-inset-bottom)); }
 .call-active .control { padding: 10px; }
 .student-entry .account-number { font-size: 48px; font-weight: 600; letter-spacing: .2em; text-align: center; color: var(--red); user-select: all; }

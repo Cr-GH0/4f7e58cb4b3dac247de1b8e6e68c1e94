@@ -93,6 +93,17 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       data.usedConversations.push(conversationId);
       return { created: true, data };
     }),
+    openDesktop: () => mutate(data => {
+      // A fresh desktop page starts a new classroom session. Retire the old
+      // performance atomically, including unfinished background generation.
+      data.active = false;
+      data.dismissed = true;
+      data.checkpoint = null;
+      data.lastSegment = 0;
+      data.performance = null;
+      data.sources = null;
+      return data;
+    }),
     saveProgress: (version, segment) => mutate(data => {
       if (data.version !== version || !data.active || data.dismissed) return data;
       data.lastSegment = Math.max(data.lastSegment, segment);

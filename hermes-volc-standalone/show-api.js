@@ -86,6 +86,11 @@ export function createShowHandler({ store, students, secret, password, settings,
       const teacher = await requireTeacher();
       if (!teacher) return json({ error: 'Sign in with the teacher account to use the classroom show.' }, 401);
 
+      if (path === '/api/show/desktop/open' && request.method === 'POST') {
+        const state = await store.openDesktop();
+        return json({ version: state.version, active: false, dismissed: true, checkpoint: null });
+      }
+
       if (path === '/api/show/editor') {
         if (!sources) return json({ error: '当前服务不支持编辑课堂大屏。' }, 503);
         if (request.method === 'GET') return json(await sources.current());

@@ -1,5 +1,5 @@
 body { color: var(--ink); }
-.editor-app { min-height: 100dvh; padding: 0 clamp(18px, 3vw, 44px) 24px; }
+.editor-app { min-height: calc(100 * var(--mimi-vh)); padding: 0 clamp(18px, 3vw, 44px) 24px; }
 .editor-header { display: flex; align-items: center; justify-content: space-between; min-height: 96px; gap: 24px; border-bottom: 1px solid var(--gold-line); }
 .editor-header > div, .editor-header nav { display: flex; align-items: center; gap: 24px; }
 .editor-header h1 { margin: 0; font-size: 21px; font-weight: 500; }
@@ -8,7 +8,7 @@ body { color: var(--ink); }
 .editor-header button { min-width: 96px; }
 .editor-status { min-height: 24px; margin: 14px 0; font-size: 14px; color: var(--muted); }
 .editor-status.is-error { color: var(--red-dark); }
-.editor-workspace { display: grid; grid-template-columns: minmax(340px, .9fr) minmax(450px, 1.3fr); gap: 24px; height: calc(100dvh - 178px); min-height: 500px; }
+.editor-workspace { display: grid; grid-template-columns: minmax(340px, .9fr) minmax(450px, 1.3fr); gap: 24px; height: calc(calc(100 * var(--mimi-vh)) - 178px); min-height: 500px; }
 .editor-source, .editor-preview { min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--gold-line); border-radius: 10px; overflow: hidden; background: var(--paper); }
 .editor-tabs { display: flex; border-bottom: 1px solid var(--gold-line); padding: 6px 14px 0; gap: 12px; }
 .editor-tabs button { border: 0; border-radius: 0; background: transparent; padding: 14px 6px; color: var(--muted); border-bottom: 2px solid transparent; }
