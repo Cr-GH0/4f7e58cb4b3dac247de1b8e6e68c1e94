@@ -93,7 +93,7 @@ export function createShowHandler({ store, students, secret, password, settings,
         if (!state) return json({ error: '另一窗口正在使用大屏。关闭该窗口后即可进入。' }, 409);
         if (narrator) void narrator.ensure(state);
         warmOpening();
-        return json({ version: state.version, active: state.active, preparing: state.preparing, dismissed: state.dismissed, checkpoint: state.checkpoint });
+        return json({ version: state.version, resetEpoch: state.resetEpoch, active: state.active, preparing: state.preparing, dismissed: state.dismissed, checkpoint: state.checkpoint });
       }
       if (path === '/api/show/desktop/close' && request.method === 'POST') {
         const { desktopId } = await request.json();
@@ -101,6 +101,14 @@ export function createShowHandler({ store, students, secret, password, settings,
         return json({ ok: true });
       }
 
+      if (path === '/api/show/reset' && request.method === 'POST') {
+        const { requestId } = await request.json();
+        if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) return json({ error: 'Invalid reset request.' }, 400);
+        const state = await store.forceReset(requestId);
+        narrator?.cancelBefore(state.version);
+        if (narrator && state.desktop && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
+        return json({ ok: true, version: state.version, resetEpoch: state.resetEpoch });
+      }
       if (path === '/api/show/editor') {
         if (!sources) return json({ error: '当前服务不支持编辑课堂大屏。' }, 503);
         if (request.method === 'GET') return json(await sources.current());
@@ -127,7 +135,8 @@ export function createShowHandler({ store, students, secret, password, settings,
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(conversationId) || !text) return json({ error: 'Say something first.' }, 400);
         const requestId = input.requestId ?? conversationId;
         if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) return json({ error: 'Invalid message.' }, 400);
-        const result = await store.trigger(requestId, text, await loadSources?.());
+        const result = await store.trigger(requestId, text, await loadSources?.(), input.resetEpoch ?? 0);
+        if (result.stale) return json({ error: '大屏已重置，请重新输入指令。', resetEpoch: result.data.resetEpoch }, 409);
         if (result.busy) return json({ reply: 'The report is still playing.' });
         if (!result.created) return json({ reply: (await store.loadContent()).teacherLines.alreadyDone });
         if (narrator) void narrator.ensure(result.data);
@@ -142,7 +151,7 @@ export function createShowHandler({ store, students, secret, password, settings,
         const content = await store.loadContent();
         if (narrator && (state.active || state.preparing) && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
         return json({
-          version: state.version, active: state.active, preparing: state.preparing, dismissed: state.dismissed, triggerText: state.triggerText,
+          version: state.version, resetEpoch: state.resetEpoch, active: state.active, preparing: state.preparing, dismissed: state.dismissed, triggerText: state.triggerText,
           lastSegment: state.lastSegment, checkpoint: state.checkpoint, startedAt: state.startedAt, audioReady: content.narrationMode === 'dynamic' ? state.performance?.status === 'ready' : await store.audioReady(),
           narrationStatus: state.performance?.status, narrationError: state.performance?.error,
           contentRevision: await store.contentRevision?.(),

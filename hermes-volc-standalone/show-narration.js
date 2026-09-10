@@ -26,6 +26,7 @@ export function parseNarration(raw) {
 // or reconnecting never asks the model to rewrite a partially spoken report.
 export function createNarrationGenerator({ store, settings, speech, arkKey, loadSources, fetcher = fetch }) {
   const jobs = new Map();
+  const cancellations = new Map();
   let openingJob;
   const retryOnce = async action => {
     try { return await action(); } catch { return action(); }
@@ -46,7 +47,8 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
     })().finally(() => { openingJob = null; });
     return openingJob;
   }
-  async function generate(snapshot) {
+  async function generate(snapshot, signal) {
+    const generationFetch = (url, init) => fetcher(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, signal]) : signal });
     let current = await store.state();
     if (current.version !== snapshot.version || !(current.active || current.preparing) || current.dismissed || current.performance?.status === 'ready') return;
     const alive = async () => { const s = await store.state(); return s.version === snapshot.version && (s.active || s.preparing) && !s.dismissed; };
@@ -66,7 +68,7 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
           thinking: { type: 'disabled' }, response_format: { type: 'json_object' },
         };
         narration = await retryOnce(async () => {
-          const result = parseNarration(await completeReply(body, arkKey, fetcher));
+          const result = parseNarration(await completeReply(body, arkKey, generationFetch));
           const count = result.reduce((count, part) => count + part.text.split(/\s+/).length, 0);
           if (count > 140) {
             body.messages[0].content += `\nThe previous draft was too long (${count} words). For this revision, enforce section limits: intro 16 words, case1 32 words, case2 45 words, method 22 words. Count only text, not anchors. Compress the wording while preserving meaning.`;
@@ -80,22 +82,26 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
       await store.savePerformance(snapshot.version, { status: 'synthesizing', narration });
       const tts = { ...configured.tts, speaker: content.voice?.speaker?.trim() || configured.tts.speaker, speechRate: content.voice?.speechRate ?? configured.tts.speechRate };
       const entries = await Promise.all(narration.map(async segment => {
-        const result = await retryOnce(() => synthesizeSpeech(segment.text, speech, { tts }, fetcher));
+        const result = await retryOnce(() => synthesizeSpeech(segment.text, speech, { tts }, generationFetch));
         return { id: segment.id, bytes: Buffer.from(result.audio, 'base64') };
       }));
       if (!await alive()) return;
       await store.writePerformanceAudio(snapshot.version, entries);
       await store.savePerformance(snapshot.version, { status: 'ready', narration, generatedAt: new Date().toISOString(), error: null });
     } catch (error) {
+      if (signal.aborted) return;
       console.error('[show narration]', error instanceof Error ? error.message : error);
       await store.savePerformance(snapshot.version, { status: 'error', error: 'Mimi could not prepare the spoken explanation.' });
     }
   }
   return {
     prepareOpening,
+    cancelBefore(version) { for (const [id, controller] of cancellations) if (id < version) controller.abort(); },
     ensure(snapshot) {
       if (jobs.has(snapshot.version)) return jobs.get(snapshot.version);
-      const job = generate(snapshot).finally(() => jobs.delete(snapshot.version));
+      const controller = new AbortController();
+      cancellations.set(snapshot.version, controller);
+      const job = generate(snapshot, controller.signal).finally(() => { jobs.delete(snapshot.version); cancellations.delete(snapshot.version); });
       jobs.set(snapshot.version, job);
       return job;
     },

@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const emptyState = () => ({ version: 0, active: false, dismissed: false, conversationId: null, triggerText: '', startedAt: null, lastSegment: 0, usedConversations: [] });
+const emptyState = () => ({ version: 0, resetEpoch: 0, resetRequests: [], active: false, dismissed: false, conversationId: null, triggerText: '', startedAt: null, lastSegment: 0, usedConversations: [] });
 
 function validateContent(content) {
   const encoder = new TextEncoder();
@@ -75,7 +75,8 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
   return {
     state: readState,
     contentRevision: async () => String((await stat(contentPath)).mtimeMs),
-    trigger: (conversationId, text, sources = null) => mutate(data => {
+    trigger: (conversationId, text, sources = null, resetEpoch = 0) => mutate(data => {
+      if (resetEpoch !== data.resetEpoch) return { created: false, stale: true, data };
       // The once-per-session rule is checked and written inside the same queued
       // mutation, so two concurrent says cannot both trigger.
       if (data.usedConversations.includes(conversationId)) return { created: false, data };
@@ -94,6 +95,22 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       if (!prepared) data.sources = sources && typeof sources.html === 'string' && typeof sources.prompt === 'string' ? structuredClone(sources) : null;
       data.usedConversations.push(conversationId);
       return { created: true, data };
+    }),
+    forceReset: requestId => mutate(data => {
+      if (data.resetRequests.includes(requestId)) return data;
+      data.resetRequests = [...data.resetRequests.slice(-19), requestId];
+      data.resetEpoch += 1;
+      data.version += 1;
+      data.active = false;
+      data.preparing = true;
+      data.dismissed = false;
+      data.conversationId = null;
+      data.triggerText = 'As a foreign listener, what have you noticed in the students’ sharing? Prepare your observations from this report.';
+      data.startedAt = null;
+      data.checkpoint = null;
+      data.lastSegment = 0;
+      data.performance = null;
+      return data;
     }),
     openDesktop: (desktopId, sources = null) => mutate(data => {
       const now = Date.now();

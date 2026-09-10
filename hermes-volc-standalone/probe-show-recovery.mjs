@@ -309,3 +309,48 @@ test('a live desktop owns its prepared round; second windows and late closes can
     assert.equal((await caller(handler, f.cookie)('/api/show/dismiss', { version: replacement.version, desktopId: 'first-desktop' })).status, 409);
   } finally { await f.cleanup(); }
 });
+
+test('phone force reset cancels a round, preserves content, rejects old requests and can be retried safely', async () => {
+  const f = await fixture('mimi-force-reset-');
+  try {
+    const source = { html: '<main>Keep this report</main>', prompt: 'Keep these instructions' };
+    const opened = await f.store.openDesktop('classroom-owner', source);
+    await f.store.trigger('first-request', 'Explain it.', source);
+    await f.store.savePerformance(opened.version, { status: 'ready', narration });
+    const call = caller(createShowHandler({ store: f.store, students: f.students, secret: 'fixture' }), f.cookie);
+    const reset = await (await call('/api/show/reset', { requestId: 'reset-once' })).json();
+    assert.equal(reset.resetEpoch, 1);
+    const state = await f.store.state();
+    assert.equal(state.active, false);
+    assert.equal(state.performance, null);
+    assert.equal(state.checkpoint, null);
+    assert.deepEqual(state.sources, source);
+    assert.equal(state.desktop.id, 'classroom-owner');
+    await f.store.savePerformance(opened.version, { status: 'ready', narration });
+    await f.store.saveCheckpoint(opened.version, { phase: 'done', index: 0, offset: 0 });
+    assert.equal((await f.store.state()).performance, null);
+    assert.equal((await call('/api/show/say', { conversationId: 'old-delayed-request', text: 'Late old request', resetEpoch: 0 })).status, 409);
+    const next = await f.store.trigger('new-request', 'Explain again.', source, 1);
+    assert.equal(next.created, true);
+    await call('/api/show/reset', { requestId: 'reset-once' });
+    assert.equal((await f.store.state()).active, true, 'retrying a reset whose response was lost does not cancel a later round');
+    assert.equal((await f.store.state()).version, next.data.version);
+  } finally { await f.cleanup(); }
+});
+
+test('force reset aborts an in-flight generation without publishing its result', async () => {
+  const f = await fixture('mimi-force-abort-');
+  let signal;
+  try {
+    const gen = createNarrationGenerator({ store: f.store, settings: async () => defaultSettings(), speech: { appId: 'fixture', token: 'fixture' }, arkKey: 'fixture', loadSources: async () => ({ html: 'report', prompt: 'instructions' }),
+      fetcher: (url, init) => new Promise((resolve, reject) => { signal = init.signal; if (signal.aborted) reject(signal.reason); else signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }) });
+    const started = await f.store.trigger('first', 'Explain.');
+    const job = gen.ensure(started.data);
+    while (!signal) await new Promise(resolve => setTimeout(resolve, 1));
+    const reset = await f.store.forceReset('force');
+    gen.cancelBefore(reset.version);
+    await job;
+    assert.equal(signal.aborted, true);
+    assert.equal((await f.store.state()).performance, null);
+  } finally { await f.cleanup(); }
+});

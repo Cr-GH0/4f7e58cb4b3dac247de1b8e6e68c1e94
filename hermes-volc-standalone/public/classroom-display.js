@@ -10,6 +10,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   let initialized = false, initializing = false, disposed = false, running = false, seen = 0, token = 0, preparedVersion = null;
   const desktopId = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
   let entered = audio.armed, preparingAssets = false, readyVersion = null, pendingDismiss = null, polling = false;
+  let preparationToken = 0, preparationJob = Promise.resolve();
   let gateMessage = '进入课堂后，Mimi 会准备好声音和报告。';
   let snapshot = null, point = null, content = null, retryAt = 0, frameLoad = null, renderedVersion = null;
   let phase = 'idle', reportVisible = false, error = '', section = '', traceIndex = 0, traceDone = 0, preloadReport = false, completed = false, dismissing = false;
@@ -18,7 +19,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     if (body) body = { ...body, desktopId };
     const response = await fetch(path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10000), headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
     const data = await response.json();
-    if (!response.ok) { const error = new Error(data.error ?? 'Mimi could not complete this request.'); error.lostDesktop = data.lostDesktop; throw error; }
+    if (!response.ok) { const error = new Error(data.error ?? 'Mimi could not complete this request.'); error.lostDesktop = data.lostDesktop; error.staleReport = response.status === 409 && !data.lostDesktop; throw error; }
     return data;
   };
   function render() {
@@ -103,7 +104,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   async function arm() { try { await Promise.race([audio.arm(), delay(300)]); } catch {} }
   function level(value) { host.querySelector('[data-mimi-presence]')?.style.setProperty('--voice-level', value.toFixed(3)); }
   function resetView(state) {
-    token++; running = false; audio.stop(); level(0);
+    token++; preparationToken++; preparingAssets = false; running = false; audio.stop(); level(0);
     snapshot = state; seen = Math.max(seen, state.version); point = null;
     completed = false; reportVisible = false; preloadReport = false; traceDone = 0; phase = 'idle'; error = ''; section = ''; content = null;
     try { storage.setItem(CHECKPOINT_KEY, 'null'); } catch {}
@@ -121,26 +122,29 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   async function prepareClassroom(state) {
     if (preparingAssets || disposed) return;
     preparingAssets = true; gateMessage = '正在准备课堂…'; render();
-    const version = state.version;
+    const version = state.version, prepToken = ++preparationToken;
+    const alive = () => !disposed && entered && !snapshot?.dismissed && snapshot?.version === version && preparationToken === prepToken;
     try {
       const deadline = Date.now() + 90000;
       let next;
       do {
         next = await api('/api/show/content?version=' + version);
-        if (disposed || !entered || snapshot?.dismissed || snapshot?.version !== version) return;
+        if (!alive()) return;
         if (next.narrationStatus === 'error') throw new Error(next.narrationError);
         if (Date.now() > deadline) throw new Error('准备时间较长，请重新准备。');
         if (!next.audioReady || !next.narration.length) await delay(700);
       } while (!next.audioReady || !next.narration.length);
       content = next; preloadReport = true; render();
-      await audio.prepareShow(content);
+      preparationJob = preparationJob.catch(() => {}).then(() => { if (alive()) return audio.prepareShow(next); });
+      await preparationJob;
+      if (!alive()) return;
       if (frameLoad) await Promise.race([frameLoad, delay(15000).then(() => { throw new Error('报告未能打开。'); })]);
-      if (disposed || !entered || snapshot?.dismissed || snapshot?.version !== version) return;
+      if (!alive()) return;
       if (!audio.armed) throw new Error('请点击进入课堂以启用声音。');
       preparedVersion = version; readyVersion = version; gateMessage = ''; render();
     } catch (failure) {
-      if (!disposed) { gateMessage = failure.message || '课堂准备未完成，请重试。'; }
-    } finally { preparingAssets = false; render(); }
+      if (alive()) { gateMessage = failure.message || '课堂准备未完成，请重试。'; }
+    } finally { if (preparationToken === prepToken) { preparingAssets = false; render(); } }
   }
 
   async function retry() {
@@ -236,7 +240,8 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     try {
       if (!entered) return;
       if (pendingDismiss !== null) {
-        await api('/api/show/dismiss', { version: pendingDismiss });
+        try { await api('/api/show/dismiss', { version: pendingDismiss }); }
+        catch (failure) { if (!failure.staleReport) throw failure; }
         pendingDismiss = null; initialized = false; readyVersion = null;
       }
       if (!initialized) {
@@ -245,7 +250,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
         try {
           const state = await api('/api/show/desktop/open', {});
           if (disposed) return;
-          resetView(state);
+          resetView({ ...state, active: false });
           initialized = true;
           void prepareClassroom(state);
         } finally { initializing = false; }
@@ -253,6 +258,12 @@ export function mountClassroomDisplay(host, { storage, audio }) {
       }
       const state = await api('/api/show/state');
       if (disposed) return;
+      if ((state.resetEpoch ?? 0) > (snapshot?.resetEpoch ?? 0)) {
+        pendingDismiss = null; preparedVersion = null; readyVersion = null;
+        resetView({ ...state, active: false });
+        void prepareClassroom(state);
+        return;
+      }
       if (state.dismissed && state.version >= seen) { if (snapshot?.version !== state.version || !snapshot?.dismissed) resetView(state); return; }
       if (state.active && readyVersion === state.version && !snapshot?.active && !running && !completed) void run(state);
       else if (phase === 'paused' && !running && Date.now() >= retryAt && state.active && state.narrationStatus !== 'error') void run(state, point);

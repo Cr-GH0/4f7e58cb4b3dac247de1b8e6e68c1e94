@@ -192,6 +192,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
     }
     if (path === '/api/show/progress') { progress.push(JSON.parse(options.body)); return Response.json({ ok: true }); }
     if (path === '/api/show/dismiss') { Object.assign(snapshot, { active: false, dismissed: true }); return Response.json({ ok: true }); }
+    if (path === '/api/show/reset') { Object.assign(snapshot, { version: snapshot.version + 1, resetEpoch: (snapshot.resetEpoch ?? 0) + 1, active: false, preparing: true }); return Response.json({ ok: true, resetEpoch: snapshot.resetEpoch }); }
     if (path === '/api/show/say') { calls.push(JSON.parse(options.body)); if (sayGate) await sayGate; return Response.json({ reply: 'I’m preparing the report.', version: 1 }); }
     if (path.startsWith('/api/show/state')) return Response.json(snapshot);
     if (path.startsWith('/api/show/content')) return Response.json({ ...generated, version: Number(new URL(path, 'http://fixture').searchParams.get('version')) });
@@ -206,6 +207,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
     type: (value, isComposing = false) => { input.value = value; inputEvents.get('input')({ isComposing }); },
     compositionStart: () => inputEvents.get('compositionstart')(), compositionEnd: value => { input.value = value; inputEvents.get('compositionend')(); },
     enter: ({ isComposing = false, keyCode = 13 } = {}) => inputEvents.get('keydown')({ key: 'Enter', shiftKey: false, isComposing, keyCode, preventDefault() {} }),
+    action: tc => listeners.get('click')?.({ target: { closest: () => ({ dataset: { tc } }) } }),
     click: target => listeners.get('click')?.({ target: { closest: selector => selector === target ? {} : null } }),
     cleanup: async () => { dispose(); await pause(30); for (const [key, value] of Object.entries(originals)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } },
   };
@@ -234,7 +236,7 @@ test('phone retains auto-created sessions and sends the summary command without 
     assert.equal(sent.text, 'Please summarize the practice.');
     assert.ok(sent.conversationId);
     assert.ok(JSON.parse(f.memory.get('mimi.teacher.v1')).list[0].lines.length === 2);
-    assert.ok(!f.calls.some(p => typeof p === 'string' && p.startsWith('/api/show/state')));
+    assert.equal(f.calls.filter(p => p === '/api/show/state').length, 1, 'phone reads reset generation once');
     assert.equal(f.ctx.sources.length, 0);
   } finally { await f.cleanup(); }
 });
@@ -386,4 +388,39 @@ test('opening the desktop retires completed and interrupted reports instead of r
       assert.equal(f.ctx.sources[0].offset, 0);
     } finally { await f.cleanup(); }
   }
+});
+
+test('phone reset remains available during sending and discards the old response', async () => {
+  const f = consoleFixture({ phone: true, holdSay: true });
+  try {
+    f.type('Explain the report.'); f.enter();
+    await until(() => f.calls.some(c => typeof c === 'object'), 'request sent');
+    f.action('reset');
+    await until(() => f.host.innerHTML.includes('已重置'), 'server confirmed reset');
+    assert.ok(!/textarea[^>]*readonly/.test(f.host.innerHTML));
+    f.releaseSay(); await pause(30);
+    assert.ok(!f.host.innerHTML.includes('I’m preparing the report.'), 'late response cannot undo reset');
+    f.type('Explain again.'); f.enter();
+    await until(() => f.calls.filter(c => typeof c === 'object').length === 2, 'a new request can be sent');
+    assert.equal(f.calls.filter(c => typeof c === 'object')[1].resetEpoch, 1);
+  } finally { await f.cleanup(); }
+});
+
+test('desktop force reset interrupts audio and a new request starts at the beginning', async () => {
+  const state = { version: 1, resetEpoch: 0, active: true };
+  const f = consoleFixture({ snapshot: state });
+  try {
+    await until(() => f.ctx.sources.length === 1, 'first round plays');
+    f.ctx.currentTime = 25;
+    await until(() => !f.report.hidden, 'report visible');
+    const lateEnd = f.ctx.sources[0].onended;
+    Object.assign(state, { version: 2, resetEpoch: 1, active: false, preparing: true, checkpoint: null });
+    await until(() => f.report.hidden, 'reset hides the report');
+    assert.equal(f.ctx.sources[0].onended, null, 'old audio stopped');
+    lateEnd();
+    assert.equal(f.returnButton.hidden, true, 'old completion cannot restore report');
+    Object.assign(state, { active: true, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
+    await until(() => f.ctx.sources.length === 2, 'next request plays');
+    assert.equal(f.ctx.sources[1].offset, 0);
+  } finally { await f.cleanup(); }
 });

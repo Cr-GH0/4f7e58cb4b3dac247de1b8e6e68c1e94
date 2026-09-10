@@ -31,6 +31,7 @@ function mountTeacherPhone(host, { storage }) {
   catch { error = 'Could not read your sessions on this device.'; }
   if (!sessions.list.some(s => s.id === sessions.currentId)) sessions.currentId = null;
   let signingOut = false, history = false, sending = false, composing = false, pending = null, draft = '', pauseMs = 1200, timer, disposed = false;
+  let resetting = false, resetRequest = null, resetNotice = '', resetEpoch = 0, sendGeneration = 0;
   const current = () => sessions.list.find(s => s.id === sessions.currentId) ?? null;
   const persist = () => { try { storage.setItem(STORE_KEY, JSON.stringify(sessions)); } catch { error = 'Could not save sessions on this device.'; } };
   const api = async (path, body) => {
@@ -39,6 +40,8 @@ function mountTeacherPhone(host, { storage }) {
     if (!response.ok) throw new Error(data.error ?? 'Mimi could not complete this request.');
     return data;
   };
+  const initialState = api('/api/show/state').then(state => { if (sendGeneration === 0) resetEpoch = state.resetEpoch ?? 0; });
+  void initialState.catch(() => {});
   function newSession() {
     const session = { id: newSessionId(), title: '', createdAt: new Date().toISOString(), lines: [] };
     sessions.list.unshift(session);
@@ -48,22 +51,38 @@ function mountTeacherPhone(host, { storage }) {
   }
   async function send(text, requestId = null) {
     const value = String(text ?? '').trim();
-    if (!value || disposed || sending || signingOut || composing) return;
+    if (!value || disposed || sending || signingOut || resetting || resetRequest || composing) return;
     clearTimeout(timer);
     if (!current()) newSession();
-    sending = true; error = ''; draft = '';
+    const generation = sendGeneration;
+    sending = true; error = ''; resetNotice = ''; draft = '';
     const session = current();
     if (!requestId) session.lines.push({ role: 'teacher', text: value });
     pending = { text: value, requestId: requestId ?? newSessionId() };
     if (!session.title) session.title = value.slice(0, 16);
     persist(); render();
     try {
-      const result = await api('/api/show/say', { conversationId: session.id, requestId: pending.requestId, text: value });
+      await initialState.catch(async () => { const state = await api('/api/show/state'); if (generation === sendGeneration) resetEpoch = state.resetEpoch ?? 0; });
+      if (generation !== sendGeneration || disposed) return;
+      const result = await api('/api/show/say', { conversationId: session.id, requestId: pending.requestId, text: value, resetEpoch });
+      if (generation !== sendGeneration || disposed) return;
       session.lines.push({ role: 'mimi', text: result.reply });
       pending = null;
       persist();
-    } catch (e) { error = e.message; }
+    } catch (e) { if (generation !== sendGeneration || disposed) return; error = e.message; }
     sending = false; render();
+  }
+  async function forceReset() {
+    if (resetting || signingOut) return;
+    resetting = true; resetRequest ??= newSessionId(); sendGeneration++;
+    clearTimeout(timer); sending = false; pending = null; draft = ''; composing = false; error = ''; resetNotice = '正在重置…'; render();
+    try {
+      const result = await api('/api/show/reset', { requestId: resetRequest });
+      if (disposed) return;
+      resetEpoch = result.resetEpoch; resetRequest = null;
+      resetNotice = '已重置'; history = false;
+    } catch { resetNotice = '重置失败，请再次点击重试。'; }
+    finally { resetting = false; render(); }
   }
   function render() {
     if (disposed) return;
@@ -71,9 +90,9 @@ function mountTeacherPhone(host, { storage }) {
     const focused = Boolean(active && host.contains(active) && active.dataset?.tcInput !== undefined);
     const caret = focused ? active.selectionStart : null;
     const session = current();
-    host.innerHTML = `<main class="tc-app"><header class="tc-header"><span class="wordmark">Mimi</span><span class="tc-actions"><button type="button" data-tc="history">${history ? 'Back' : 'History'}</button><button type="button" data-tc="new">New chat</button><button type="button" data-tc="logout" ${signingOut ? 'disabled' : ''}>Sign out</button></span></header><div class="tc-body">${history
+    host.innerHTML = `<main class="tc-app"><header class="tc-header"><span class="wordmark">Mimi</span><span class="tc-actions"><button type="button" data-tc="history">${history ? 'Back' : 'History'}</button><button type="button" data-tc="new">New chat</button><button type="button" data-tc="logout" ${signingOut ? 'disabled' : ''}>Sign out</button></span></header><div class="tc-reset"><button type="button" data-tc="reset" ${resetting || signingOut ? 'disabled' : ''}>强制重置大屏</button><span role="status">${esc(resetNotice)}</span></div><div class="tc-body">${history
       ? `<section class="tc-sessions">${sessions.list.map(s => `<button type="button" class="tc-session ${s.id === sessions.currentId ? 'is-current' : ''}" data-tc-session="${esc(s.id)}"><strong>${esc(s.title || 'New chat')}</strong><small>${esc(new Date(s.createdAt).toLocaleString('en-GB'))}</small></button>`).join('') || '<p class="tc-empty">No conversations yet.</p>'}</section>`
-      : `<section class="tc-chat ${!session ? 'is-empty' : ''}" aria-label="Conversation"><div class="tc-scroll" data-tc-scroll>${session ? session.lines.map(line => `<div class="tc-line ${line.role === 'teacher' ? 'tc-teacher' : 'tc-mimi'}">${esc(line.text)}</div>`).join('') : ''}</div><footer class="tc-composer"><textarea data-tc-input rows="1" aria-label="Message Mimi" placeholder="Message Mimi" ${sending ? 'readonly' : ''}>${esc(draft)}</textarea>${sending ? '<p class="tc-hint" role="status">Sending…</p>' : ''}</footer></section>`}</div>${error ? `<p class="tc-error" role="alert">${esc(error)}${pending ? ' <button type="button" data-tc="retry">Try again</button>' : ''}</p>` : ''}</main>`;
+      : `<section class="tc-chat ${!session ? 'is-empty' : ''}" aria-label="Conversation"><div class="tc-scroll" data-tc-scroll>${session ? session.lines.map(line => `<div class="tc-line ${line.role === 'teacher' ? 'tc-teacher' : 'tc-mimi'}">${esc(line.text)}</div>`).join('') : ''}</div><footer class="tc-composer"><textarea data-tc-input rows="1" aria-label="Message Mimi" placeholder="Message Mimi" ${sending || resetting || resetRequest ? 'readonly' : ''}>${esc(draft)}</textarea>${sending ? '<p class="tc-hint" role="status">Sending…</p>' : ''}</footer></section>`}</div>${error ? `<p class="tc-error" role="alert">${esc(error)}${pending ? ' <button type="button" data-tc="retry">Try again</button>' : ''}</p>` : ''}</main>`;
     const input = host.querySelector('[data-tc-input]');
     if (focused && input) { input.focus({ preventScroll: true }); if (caret !== null) input.setSelectionRange(caret, caret); }
     const scroller = host.querySelector('[data-tc-scroll]');
@@ -92,13 +111,14 @@ function mountTeacherPhone(host, { storage }) {
   async function click(event) {
     const button = event.target.closest('[data-tc], [data-tc-session]');
     if (!button || button.disabled) return;
+    if (button.dataset.tc === 'reset') { void forceReset(); return; }
     if (button.dataset.tc === 'logout') {
       signingOut = true; clearTimeout(timer); button.disabled = true;
       try { await signOut(); }
       catch (e) { signingOut = false; error = e.message; render(); }
       return;
     }
-    if (sending || signingOut) return;
+    if (sending || signingOut || resetting || resetRequest) return;
     if (button.dataset.tc === 'retry' && pending) { void send(pending.text, pending.requestId); return; }
     if (button.dataset.tcSession) { sessions.currentId = button.dataset.tcSession; history = false; persist(); }
     if (button.dataset.tc === 'new') { clearTimeout(timer); draft = ''; pending = null; composing = false; error = ''; newSession(); }
