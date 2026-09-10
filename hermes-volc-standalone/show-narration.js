@@ -1,7 +1,7 @@
 import { completeReply, synthesizeSpeech } from './public/talk-api.js';
 
 export const NARRATION_IDS = ['intro', 'case1', 'case2', 'method'];
-const OUTPUT_FORMAT = `Playback format: return only a JSON object with a narration array of exactly four entries, using IDs intro, case1, case2, method in that order. These are consecutive parts of ONE spoken response, not four turns. The IDs are playback labels; follow the supplied report and speaking instructions for subject matter. Each entry has id and text. Text must be plain spoken English without Markdown, below 900 UTF-8 bytes per entry. This format controls delivery only; do not mention it aloud.`;
+const OUTPUT_FORMAT = `Playback format: return only a JSON object with a narration array of exactly four entries, using IDs intro, case1, case2, method in that order. These are consecutive parts of ONE spoken response, not four turns. The IDs are playback labels; follow the supplied report and speaking instructions for subject matter. Each entry has id and text. Text must be plain spoken English without Markdown, below 900 UTF-8 bytes per entry. This format controls delivery only; do not mention it aloud. TIMING: the spoken report has 49.2 seconds. This timing limit takes priority over any longer word counts above. Write 110–125 words TOTAL: about 14–16 for intro, 30–35 for case1, 43–48 for case2, and 23–26 for method. Keep the report's key relationships, compress examples instead of reading quotations, and finish each thought. Do not mention the time limit.`;
 
 export function reportText(html) {
   return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -62,10 +62,14 @@ export function createNarrationGenerator({ store, settings, speech, arkKey, load
         const body = {
           model: configured.llm.model,
           messages: [{ role: 'system', content: prompt + '\n\n' + OUTPUT_FORMAT }, { role: 'user', content: JSON.stringify({ teacherRequest: snapshot.triggerText, report: reportText(html) }) }],
-          temperature: 0.7, top_p: 0.9, max_tokens: 1800,
+          temperature: 0.7, top_p: 0.9, max_tokens: 900,
           thinking: { type: 'disabled' }, response_format: { type: 'json_object' },
         };
-        narration = await retryOnce(async () => parseNarration(await completeReply(body, arkKey, fetcher)));
+        narration = await retryOnce(async () => {
+          const result = parseNarration(await completeReply(body, arkKey, fetcher));
+          if (result.reduce((count, part) => count + part.text.split(/\s+/).length, 0) > 140) throw new Error('The explanation is too long for this presentation.');
+          return result;
+        });
       }
       if (!await alive()) return;
       await store.savePerformance(snapshot.version, { status: 'synthesizing', narration });

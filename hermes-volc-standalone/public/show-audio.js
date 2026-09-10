@@ -1,3 +1,5 @@
+import { fitSpeech } from './fit-speech.js';
+import { SHOW_TIMELINE, SHOW_TIMING } from './show-timing.js';
 // Decode the complete set before advertising readiness. Playback never advances
 // on an error; the caller retains the checkpoint until a real ended event.
 export class ShowAudio {
@@ -38,10 +40,24 @@ export class ShowAudio {
     }));
     this.buffers = new Map([...(this.buffers.has('ack') ? [['ack', this.buffers.get('ack')]] : []), ...entries]);
   }
+  async prepareShow(content) {
+    await Promise.all([this.prepareOpening(), this.prepare(content, { opening: false })]);
+    const spoken = SHOW_TIMELINE.filter(part => part.audioId);
+    const rate = this.buffers.get('ack').sampleRate;
+    const channels = Math.max(...spoken.map(part => this.buffers.get(part.audioId).numberOfChannels));
+    const combined = this.context.createBuffer(channels, Math.round(SHOW_TIMING.total * rate), rate);
+    for (const part of spoken) {
+      const fitted = fitSpeech(this.context, this.buffers.get(part.audioId), part.duration);
+      for (let channel = 0; channel < channels; channel++) {
+        combined.getChannelData(channel).set(fitted.getChannelData(Math.min(channel, fitted.numberOfChannels - 1)), Math.round(part.start * rate));
+      }
+    }
+    this.buffers.set('show', combined);
+  }
   stop() {
     this.active?.cancel();
   }
-  play(id, offset = 0, onProgress = () => {}, { onStart = () => {}, onLevel = () => {}, onEnd = () => {} } = {}) {
+  play(id, offset = 0, onProgress = () => {}, { onStart = () => {}, onLevel = () => {}, onEnd = () => {}, onPosition = () => {} } = {}) {
     this.stop();
     return new Promise((resolve, reject) => {
       const buffer = this.buffers.get(id);
@@ -56,13 +72,14 @@ export class ShowAudio {
       } else source.connect(this.context.destination);
       const from = Math.max(0, Math.min(offset, Math.max(0, buffer.duration - 0.05)));
       const started = this.context.currentTime;
-      let timer, meter, settled = false;
+      let timer, meter, clock, settled = false;
       const position = () => Math.min(buffer.duration, from + this.context.currentTime - started);
       const finish = error => {
         if (settled) return;
         settled = true;
         clearInterval(timer);
         clearInterval(meter);
+        clearInterval(clock);
         this.context.removeEventListener('statechange', checkState);
         source.onended = null;
         source.disconnect();
@@ -81,6 +98,8 @@ export class ShowAudio {
       try {
         source.start(0, from);
         onStart();
+        onPosition(from);
+        clock = setInterval(() => onPosition(position()), 16);
         if (analyser) {
           const samples = new Uint8Array(analyser.fftSize);
           meter = setInterval(() => {

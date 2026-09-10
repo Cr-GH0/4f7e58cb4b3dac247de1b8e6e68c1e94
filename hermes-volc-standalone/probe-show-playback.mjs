@@ -60,7 +60,11 @@ class Context {
   constructor() { this.state = 'suspended'; this.currentTime = 0; this.destination = {}; this.events = new Map(); this.sources = []; }
   async resume() { this.state = 'running'; }
   async close() { this.state = 'closed'; }
-  async decodeAudioData() { return { duration: 30 }; }
+  async decodeAudioData() { return this.createBuffer(1, 30000, 1000); }
+  createBuffer(numberOfChannels, length, sampleRate) {
+    const channels = Array.from({ length: numberOfChannels }, () => new Float32Array(length));
+    return { numberOfChannels, length, sampleRate, duration: length / sampleRate, getChannelData: index => channels[index] };
+  }
   addEventListener(type, fn) { this.events.set(type, fn); }
   removeEventListener(type, fn) { if (this.events.get(type) === fn) this.events.delete(type); }
   createBufferSource() {
@@ -257,25 +261,26 @@ test('phone trigger speaks acknowledgement, shows four silent work stages, prese
   const f = consoleFixture({ snapshot: state, runtimeContent: { ...ready, narration: [], narrationStatus: 'generating', audioReady: false } });
   try {
     Object.assign(state, { version: 1, active: true, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
-    await until(() => f.ctx.sources.length === 1, 'acknowledgement begins');
+    await until(() => f.calls.some(p => p.startsWith('/api/show/content')), 'content is being prepared');
+    await pause(50);
+    assert.equal(f.stage().dataset.phase, 'idle', 'standby stays unchanged while loading');
+    assert.equal(f.ctx.sources.length, 0);
+    f.setContent(ready);
+    await until(() => f.ctx.sources.length === 1, 'acknowledgement begins after preloading');
     assert.equal(f.stage().dataset.phase, 'speaking');
     assert.equal(f.report.hidden, true);
-    assert.equal(f.work.hidden, true);
-    assert.deepEqual(f.calls.filter(path => typeof path === 'string' && (path === '/api/show/opening' || path.startsWith('/api/show/audio/'))), ['/api/show/opening']);
-    f.ctx.sources[0].onended();
-    await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 2), 'build call follows the first two results');
-    assert.equal((f.steps.innerHTML.match(/<li /g) ?? []).length, 3, 'future calls are not shown');
-    assert.match(f.steps.innerHTML, /20 student conversations reviewed/);
-    assert.match(f.steps.innerHTML, /2 examples selected/);
-    assert.ok(!f.steps.innerHTML.includes('open_report()'));
-    await pause(40);
-    assert.ok(!f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 3), 'opening aside cannot start before report and speech are ready');
-    assert.equal(f.report.hidden, true, 'report stays hidden until staged work completes');
-    assert.equal(f.ctx.sources.length, 1, 'tool-status text is never spoken');
-    f.setContent(ready);
-    await until(() => f.steps.innerHTML.includes('open_report()'), 'final call appears only when ready');
-    for (const tool of ['read_conversations', 'select_examples', 'build_report', 'open_report']) assert.ok(f.steps.innerHTML.includes(`${tool}()`), `${tool} invocation is visible in the work list`);
-    await until(() => f.ctx.sources.length === 2, 'report narration begins after the work stages');
+    assert.equal(f.ctx.sources[0].buffer.duration, 62);
+    for (let i = 0; i < 4; i++) {
+      f.ctx.currentTime = 5 + i * 1.5 + 0.01;
+      await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === i), 'work phase follows the audio clock');
+      assert.equal((f.steps.innerHTML.match(/<li /g) ?? []).length, i + 1);
+      assert.equal(f.report.hidden, true);
+    }
+    assert.equal(f.ctx.sources.length, 1, 'silent work adds no separate audio');
+    f.ctx.currentTime = 11.01;
+    await until(() => !f.report.hidden, 'report flies in at eleven seconds');
+    f.ctx.currentTime = 11.81;
+    await until(() => f.progress.some(p => p.checkpoint.phase === 'narration'), 'narration starts on the same audio clock');
     assert.equal(f.stage().dataset.phase, 'speaking');
     assert.ok(f.stage().classList.contains('has-report'));
     assert.match(f.report.innerHTML, /src="\/practice-report.html"/);
@@ -285,11 +290,14 @@ test('phone trigger speaks acknowledgement, shows four silent work stages, prese
     await until(() => Number(f.styles.get('--voice-level')) > 0, 'avatar responds to the audio signal');
     f.ctx.amplitude = 0;
     await until(() => Number(f.styles.get('--voice-level')) === 0, 'silence lowers the signal');
-    for (let i = 1; i <= 4; i++) {
-      await until(() => f.ctx.sources.length === i + 1, 'next spoken section');
+    for (const time of [17.81, 31.81, 50.81]) {
+      f.ctx.currentTime = time; await pause(25);
       assert.equal(f.frame(), frame); assert.equal(f.stage(), stage);
-      f.ctx.sources[i].onended();
     }
+    f.ctx.currentTime = 61.01;
+    await until(() => f.progress.some(p => p.checkpoint.phase === 'closing'), 'one second of closing follows speech');
+    assert.equal(f.returnButton.hidden, true, 'avatar is still unavailable before 62 seconds');
+    f.ctx.currentTime = 62; f.ctx.sources[0].onended();
     await until(() => f.progress.some(p => p.checkpoint.phase === 'done'), 'ends only after audio ends');
     assert.equal(f.stage().dataset.phase, 'idle');
     assert.equal(f.report.hidden, false);
@@ -303,7 +311,7 @@ test('phone trigger speaks acknowledgement, shows four silent work stages, prese
     assert.equal(f.stage().dataset.phase, 'idle');
     assert.ok(!f.stage().classList.contains('has-report'));
     assert.equal(f.returnButton.hidden, true);
-    assert.equal(f.ctx.sources.length, 5, 'return does not replay speech');
+    assert.equal(f.ctx.sources.length, 1, 'return does not replay speech');
   } finally { await f.cleanup(); }
 });
 
@@ -311,12 +319,11 @@ test('blocked audio keeps the full report and checkpoint, then resumes automatic
   const f = consoleFixture({ blocked: true, snapshot: { version: 1, active: true, narrationStatus: 'ready', checkpoint: { phase: 'narration', index: 1, offset: 4.2 } } });
   try {
     await until(() => f.stage().dataset.phase === 'paused', 'audio pause is represented accurately');
-    assert.equal(f.report.hidden, false);
     assert.equal(f.ctx.sources.length, 0);
     assert.ok(!f.progress.some(p => p.checkpoint.phase === 'done'));
     f.ctx.resume = async () => { f.ctx.state = 'running'; };
     await until(() => f.ctx.sources.length === 1, 'automatic retry resumes the saved position', 5500);
-    assert.equal(f.ctx.sources[0].offset, 4.2);
+    assert.equal(f.ctx.sources[0].offset, 22);
     assert.equal(f.stage().dataset.phase, 'speaking');
   } finally { await f.cleanup(); }
 });
@@ -325,10 +332,14 @@ test('trace resume continues from the saved stage without replaying acknowledgem
   const f = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'trace', index: 2, offset: 0.003 } } });
   try {
     await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 2), 'saved work stage resumes');
-    assert.equal(f.ctx.sources.length, 0, 'acknowledgement is not replayed after a trace checkpoint');
+    assert.equal(f.ctx.sources.length, 1);
+    assert.equal(f.ctx.sources[0].offset, 8.003, 'resume skips completed acknowledgement and work');
     assert.equal(f.report.hidden, true);
     assert.ok(!f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index < 2), 'completed work stages stay completed');
-    await until(() => f.ctx.sources.length === 1, 'narration begins after the remaining work stages');
+    f.ctx.currentTime = 1.51;
+    await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 3), 'last work phase resumes');
+    f.ctx.currentTime = 3.81;
+    await until(() => !f.report.hidden, 'narration begins after the remaining work stages');
     assert.ok(f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 3));
     assert.equal(f.report.hidden, false);
   } finally { await f.cleanup(); }
@@ -338,13 +349,13 @@ test('stale local completion cannot skip an unplayed report; fresh local offsets
   const f = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'narration', index: 0, offset: 2 } }, saved: { version: 1, checkpoint: { phase: 'done', index: 0, offset: 0 } } });
   try {
     await until(() => f.ctx.sources.length === 1, 'unplayed narration starts');
-    assert.equal(f.ctx.sources[0].offset, 2);
+    assert.equal(f.ctx.sources[0].offset, 13.8);
     assert.ok(!f.progress.some(p => p.checkpoint.phase === 'done'));
   } finally { await f.cleanup(); }
   const resumed = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'narration', index: 1, offset: 2 } }, saved: { version: 1, checkpoint: { phase: 'narration', index: 1, offset: 6.5 } } });
   try {
     await until(() => resumed.ctx.sources.length === 1, 'local checkpoint restored');
-    assert.equal(resumed.ctx.sources[0].offset, 6.5);
+    assert.equal(resumed.ctx.sources[0].offset, 24.3);
   } finally { await resumed.cleanup(); }
 });
 

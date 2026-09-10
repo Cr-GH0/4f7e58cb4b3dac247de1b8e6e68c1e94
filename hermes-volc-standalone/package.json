@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test probe-show-playback.mjs probe-show-narration.mjs probe-show-recovery.mjs",
+    "test": "node --test probe-show-playback.mjs probe-show-narration.mjs probe-show-recovery.mjs probe-show-timing.mjs",
     "check": "node probe-show.mjs"
   }
 }

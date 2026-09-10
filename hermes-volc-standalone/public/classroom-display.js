@@ -1,3 +1,4 @@
+import { showPosition, showOffset } from './show-timing.js';
 import { signOut } from './sign-out.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -84,7 +85,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     let local;
     try { local = JSON.parse(storage.getItem(CHECKPOINT_KEY) ?? 'null'); } catch {}
     if (local?.version !== state.version || local.checkpoint?.phase === 'done') return remote;
-    const rank = p => ['ack', 'trace', 'narration', 'done'].indexOf(p.phase) * 1000000 + p.index * 10000 + p.offset;
+    const rank = p => ['ack', 'trace', 'transition', 'narration', 'closing', 'done'].indexOf(p.phase) * 1000000 + p.index * 10000 + p.offset;
     return rank(local.checkpoint) > rank(remote) ? local.checkpoint : remote;
   }
   async function arm() { try { await Promise.race([audio.arm(), delay(300)]); } catch {} }
@@ -118,102 +119,71 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     running = true;
     const runToken = ++token;
     const alive = () => !disposed && token === runToken;
-    const play = async (id, part) => {
-      await arm();
-      if (!alive()) return;
-      if (!audio.armed) throw new Error('Audio playback is paused.');
-      checkpoint(part);
-      await audio.play(id, part.offset, offset => { if (alive()) checkpoint({ ...part, offset }); }, {
-        onStart: () => { if (alive()) { phase = 'speaking'; render(); } },
-        onLevel: value => { if (alive()) level(value); },
-        onEnd: () => { if (alive()) { level(0); phase = 'generating'; render(); } },
-      });
-    };
     audio.stop(); snapshot = state; seen = state.version;
     const start = resume ?? (state.active ? restore(state) : { phase: 'done', index: 0, offset: 0 });
     point = start; error = ''; retryAt = 0; completed = false; preloadReport = false; traceDone = 0;
-    phase = 'generating'; reportVisible = Boolean(content?.version === state.version && ['narration', 'done'].includes(start.phase));
+    phase = 'idle'; reportVisible = Boolean(content?.version === state.version && ['transition', 'narration', 'closing', 'done'].includes(start.phase));
     render();
     try {
       content = await api('/api/show/content?version=' + state.version);
       if (!alive()) return;
       if (content.dismissed) { resetView({ ...state, dismissed: true }); return; }
       if (start.phase === 'done') { reportVisible = true; phase = 'idle'; completed = true; render(); return; }
-      // Prepare the document and sound behind the staged activity. The last
-      // aside belongs immediately before the flight, never to a network wait.
+      // Keep standby unchanged until every asset is ready. Once Mimi reacts,
+      // no network request, per-segment loading or timer chain can add time.
       preloadReport = true; render();
-      const prepareReport = async () => {
-        const deadline = Date.now() + 90000;
-        while (alive()) {
-          content = await api('/api/show/content?version=' + state.version);
-          if (!alive()) return;
-          if (content.dismissed) { resetView({ ...state, dismissed: true }); return; }
-          if (content.narrationStatus === 'error') { retryAt = Infinity; throw new Error(content.narrationError); }
-          if (content.audioReady && content.narration.length) break;
-          if (Date.now() > deadline) { retryAt = Infinity; throw new Error('The report is taking too long.'); }
-          await delay(700);
-        }
+      const deadline = Date.now() + 90000;
+      while (!content.audioReady || !content.narration.length) {
+        if (content.narrationStatus === 'error') { retryAt = Infinity; throw new Error(content.narrationError); }
+        if (Date.now() > deadline) { retryAt = Infinity; throw new Error('The report is taking too long.'); }
+        await delay(700);
         if (!alive()) return;
-        if (preparedVersion !== state.version) { await audio.prepare(content, { opening: false }); preparedVersion = state.version; }
+        content = await api('/api/show/content?version=' + state.version);
+        if (content.dismissed) { resetView({ ...state, dismissed: true }); return; }
+      }
+      if (preparedVersion !== state.version) {
+        await audio.prepareShow(content);
+        preparedVersion = state.version;
+      }
+      if (!alive()) return;
+      if (frameLoad) await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('The report could not be opened.')), 15000);
+        frameLoad.then(() => { clearTimeout(timer); resolve(); });
+      });
+      await arm();
+      if (!alive()) return;
+      if (!audio.armed) throw new Error('Audio playback is paused.');
+      let displayed = '';
+      const displayPosition = seconds => {
         if (!alive()) return;
-        if (frameLoad) await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('The report could not be opened.')), 15000);
-          frameLoad.then(() => { clearTimeout(timer); resolve(); });
-        });
+        const part = showPosition(seconds);
+        if (part.phase === 'done') return; // Only the audio ended event enables return.
+        const key = part.phase + ':' + part.index;
+        if (key === displayed) return;
+        displayed = key;
+        phase = ['ack', 'narration'].includes(part.phase) ? 'speaking' : part.phase === 'trace' ? 'working' : 'generating';
+        reportVisible = ['transition', 'narration', 'closing'].includes(part.phase);
+        if (part.phase === 'trace') { traceIndex = part.index; traceDone = part.index; }
+        if (part.phase === 'narration') section = part.audioId;
+        checkpoint({ phase: part.phase, index: part.index, offset: part.offset });
+        render();
+        if (part.phase === 'narration') focusSection();
       };
-      // Attach the rejection handler now, even while the opening is speaking.
-      const preparation = prepareReport().then(() => null, failure => failure);
-      if (start.phase === 'ack') {
-        await audio.prepareOpening();
+      await audio.play('show', showOffset(start), seconds => {
         if (!alive()) return;
-        await play('ack', { phase: 'ack', index: 0, offset: start.offset });
-        if (!alive()) return;
-      }
-      if (['ack', 'trace'].includes(start.phase)) {
-        const first = start.phase === 'trace' ? start.index : 0;
-        for (let i = first; i < content.traceSteps.length; i++) {
-          if (!alive()) return;
-          if (i === content.traceSteps.length - 1) {
-            const failure = await preparation;
-            if (!alive()) return;
-            if (failure) throw failure;
-          }
-          traceIndex = i; traceDone = i; phase = 'working'; render();
-          const duration = content.traceDurations?.[i] ?? 2400;
-          let elapsed = i === first && start.phase === 'trace' ? start.offset * 1000 : 0;
-          checkpoint({ phase: 'trace', index: i, offset: elapsed / 1000 });
-          let lastSaved = elapsed;
-          while (elapsed < duration) {
-            const tick = Math.min(200, duration - elapsed), began = Date.now();
-            await delay(tick); if (!alive()) return;
-            elapsed = Math.min(duration, elapsed + Date.now() - began);
-            if (elapsed - lastSaved >= 1000 || elapsed === duration) { checkpoint({ phase: 'trace', index: i, offset: elapsed / 1000 }); lastSaved = elapsed; }
-          }
-        }
-      }
-      const failure = await preparation;
+        const part = showPosition(seconds);
+        if (part.phase !== 'done') checkpoint({ phase: part.phase, index: part.index, offset: part.offset });
+      }, {
+        onStart: () => displayPosition(showOffset(start)),
+        onPosition: displayPosition,
+        onLevel: value => { if (alive()) level(value); },
+        onEnd: () => { if (alive()) level(0); },
+      });
       if (!alive()) return;
-      if (failure) throw failure;
-      if (['ack', 'trace'].includes(start.phase)) {
-        traceDone = content.traceSteps.length; render();
-        await delay(160);
-        if (!alive()) return;
-      }
-      reportVisible = true; phase = 'generating'; render();
-      await delay(760);
-      if (!alive()) return;
-      const first = start.phase === 'narration' ? start.index : 0;
-      for (let i = first; i < content.narration.length; i++) {
-        if (!alive()) return;
-        const part = { phase: 'narration', index: i, offset: i === first && start.phase === 'narration' ? start.offset : 0 };
-        section = content.narration[i].id; focusSection();
-        await play(section, part);
-      }
-      if (!alive()) return;
+      // Returning the avatar is tied to the end of the 62-second audio buffer,
+      // never to a subsequent server response. Persist completion in parallel.
       const done = { phase: 'done', index: 0, offset: 0 };
-      await api('/api/show/progress', { version: state.version, checkpoint: done });
-      if (!alive()) return;
-      remember(done); completed = true; phase = 'idle'; section = ''; render();
+      checkpoint(done); completed = true; phase = 'idle'; section = ''; render();
     } catch {
       if (!alive()) return;
       phase = 'paused'; error = 'I lost my place for a moment. Let’s try again.';

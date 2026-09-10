@@ -151,10 +151,10 @@ export function createShowHandler({ store, students, secret, password, settings,
           const p = input.checkpoint;
           const content = await store.loadContent();
           const limit = p.phase === 'trace' ? content.traceSteps.length : p.phase === 'narration' ? (content.narrationMode === 'dynamic' ? 4 : content.narration.length) : 1;
-          if (!Number.isInteger(input.version) || !['ack', 'trace', 'narration', 'done'].includes(p.phase) || !Number.isInteger(p.index) || p.index < 0 || p.index >= limit || !Number.isFinite(p.offset) || p.offset < 0 || p.offset > 3600) return json({ error: 'Invalid progress.' }, 400);
+          if (!Number.isInteger(input.version) || !['ack', 'trace', 'transition', 'narration', 'closing', 'done'].includes(p.phase) || !Number.isInteger(p.index) || p.index < 0 || p.index >= limit || !Number.isFinite(p.offset) || p.offset < 0 || p.offset > 3600) return json({ error: 'Invalid progress.' }, 400);
           if (content.narrationMode === 'dynamic' && p.phase === 'done') {
             const current = await store.state();
-            if (current.version === input.version && current.active && (current.performance?.status !== 'ready' || current.checkpoint?.phase !== 'narration' || current.checkpoint.index !== 3)) return json({ error: 'The spoken explanation has not finished.' }, 409);
+            if (current.version === input.version && current.active && (current.performance?.status !== 'ready' || !((current.checkpoint?.phase === 'narration' && current.checkpoint.index === 3) || current.checkpoint?.phase === 'closing'))) return json({ error: 'The spoken explanation has not finished.' }, 409);
           }
           if (!store.saveCheckpoint) return json({ error: 'The classroom show requires the Node server.' }, 503);
           await store.saveCheckpoint(input.version, { phase: p.phase, index: p.index, offset: p.offset });
@@ -177,8 +177,8 @@ export function createShowHandler({ store, students, secret, password, settings,
           content = { ...content, artifact: { ...content.artifact, url: '/api/show/report?version=' + state.version } };
           if (state.sources.customHtml) content = {
             ...content, artifact: { ...content.artifact, title: 'Mimi · Classroom report' },
-            traceSteps: ['Reviewing the stories', 'Selecting relevant details', 'Building the report', 'Opening the report'],
-            traceResults: ['Student conversations reviewed', 'Details selected for this report', 'Report prepared', 'Report ready'],
+            traceSteps: ['Gathering my observations', 'Choosing the highlights', 'Arranging the report', 'Bringing it to the screen'],
+            traceResults: ['My observations at hand', 'Relevant details in focus', 'Report in place', 'Ready to share'],
           };
         }
         return json(content.narrationMode === 'dynamic' ? { ...content, version: state.version, dismissed: state.dismissed, contentRevision: await store.contentRevision?.(), narration: state.performance?.narration ?? [], narrationStatus: state.performance?.status ?? 'pending', narrationError: state.performance?.error, audioReady: state.performance?.status === 'ready' } : content);

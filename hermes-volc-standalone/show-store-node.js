@@ -100,7 +100,7 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
     }),
     saveCheckpoint: (version, checkpoint) => mutate(data => {
       if (data.version !== version || !data.active) return data;
-      const phases = ['ack', 'trace', 'narration', 'done'];
+      const phases = ['ack', 'trace', 'transition', 'narration', 'closing', 'done'];
       const previous = data.checkpoint ?? { phase: 'ack', index: 0, offset: 0 };
       const rank = point => phases.indexOf(point.phase) * 1000000 + point.index * 10000 + point.offset;
       if (rank(checkpoint) < rank(previous)) return data;
