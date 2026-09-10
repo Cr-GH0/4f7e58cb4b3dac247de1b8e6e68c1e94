@@ -1,7 +1,9 @@
+import { signOut } from './sign-out.js';
 const html = document.querySelector('#html'), prompt = document.querySelector('#prompt');
 const save = document.querySelector('#save'), status = document.querySelector('#status');
 const upload = document.querySelector('#import-html'), preview = document.querySelector('#preview');
 let saved = null, saving = false, previewTimer;
+const logout = document.querySelector('#sign-out');
 const dirty = () => saved && (html.value !== saved.html || prompt.value !== saved.prompt);
 function notice(text, error = false) { status.textContent = text; status.classList.toggle('is-error', error); }
 function changed() {
@@ -34,13 +36,20 @@ for (const name of ['html', 'prompt']) {
 }
 save.addEventListener('click', async () => {
   if (saving || !saved) return;
-  saving = true; save.disabled = true; notice('正在保存…');
+  saving = true; logout.disabled = true; save.disabled = true; notice('正在保存…');
   const submission = { html: html.value, prompt: prompt.value };
   try {
     saved = await api(submission);
     notice(dirty() ? '提交的内容已保存；编辑区还有新的修改。' : '已保存，从下一轮演示生效。');
   } catch (error) { notice(error.message, true); }
-  finally { saving = false; save.disabled = !dirty(); }
+  finally { saving = false; logout.disabled = false; save.disabled = !dirty(); }
+});
+logout.addEventListener('click', async () => {
+  if (saving || logout.disabled) return;
+  if (dirty() && !window.confirm('有未保存的修改，确定放弃修改并退出登录吗？')) return;
+  logout.disabled = true; save.disabled = true;
+  try { await signOut({ beforeLeave: () => { saved = null; } }); }
+  catch { notice('暂时无法退出，请重试。', true); logout.disabled = false; save.disabled = !dirty(); }
 });
 window.addEventListener('beforeunload', event => { if (dirty()) { event.preventDefault(); event.returnValue = ''; } });
 try {

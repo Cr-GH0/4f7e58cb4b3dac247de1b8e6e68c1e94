@@ -153,3 +153,7 @@
 
 .mimi-stage__settings { position: absolute; z-index: 4; left: 24px; bottom: 22px; padding: 8px 12px; color: var(--muted); text-decoration: none; font-size: 13px; border-radius: 5px; }
 .mimi-stage__settings:hover, .mimi-stage__settings:focus-visible { color: var(--red-dark); background: var(--soft); }
+
+.mimi-stage__logout { position: absolute; z-index: 4; left: 94px; bottom: 22px; padding: 8px 12px; min-height: 36px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
+.mimi-stage__logout:hover, .mimi-stage__logout:focus-visible { color: var(--red-dark); background: var(--soft); }
+.mimi-stage__logout-error { position: absolute; z-index: 4; left: 24px; bottom: 64px; margin: 0; padding: 8px 12px; background: var(--paper); color: var(--red-dark); font-size: 13px; }

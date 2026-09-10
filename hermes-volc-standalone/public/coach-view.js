@@ -1,3 +1,4 @@
+import { signOut } from './sign-out.js';
 import { createVoiceRuntime } from './voice-runtime.js';
 import { participants, personName, exportConversation } from './conversation.js';
 import { createInputDrafts } from './input-drafts.js';
@@ -106,7 +107,7 @@ export function mountCoach(host, options) {
     const message = drafts.get(c.id,'message');
     host.innerHTML = `<main class="mimi-app ${active ? 'call-active' : ''} ${!hasRecords ? 'welcome-view' : ''}"><div class="main-surface" ${panel ? 'inert' : ''}>
       ${header(active)}
-      ${options.account ? `<p class="account-label">${esc(options.account.accountName)} · ${esc(personName(c,c.participantIds[0]))}</p>` : ''}
+      ${options.account ? `<p class="account-label">${esc(options.account.accountName)} · ${esc(personName(c,c.participantIds[0]))} <button type="button" class="text-button" data-action="logout">Sign out</button></p>` : ''}
       <section class="conversation-space" aria-label="Conversation with Mimi">
         ${active && hasRecords ? `<div class="call-presence">${portrait(true,mimiPhase)}</div>` : ''}
         <div class="conversation-scroll">
@@ -198,6 +199,7 @@ export function mountCoach(host, options) {
     const idleOnly = ['new','select','person','edit','outline-panel'];
     if (state.phase !== 'idle' && idleOnly.includes(action)) return;
     try {
+      if (action === 'logout') { button.disabled = true; clearTimeout(autoTimer); await signOut({ fetchFn: options.fetchFn, beforeLeave: () => runtime.pagehide() }); return; }
       if (action === 'start') { filter = 'all'; await runtime.start(); }
       if (action === 'account' && state.phase === 'idle') { await options.onAccount?.(); return; }
       if (action === 'stop') { panel = null; await runtime.stop(); }

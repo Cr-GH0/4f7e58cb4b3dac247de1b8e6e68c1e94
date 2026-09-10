@@ -1,3 +1,4 @@
+import { signOut } from './sign-out.js';
 import { ShowAudio } from './show-audio.js';
 import { mountClassroomDisplay } from './classroom-display.js';
 
@@ -29,7 +30,7 @@ function mountTeacherPhone(host, { storage }) {
   try { sessions = JSON.parse(storage.getItem(STORE_KEY) ?? 'null') ?? sessions; }
   catch { error = 'Could not read your sessions on this device.'; }
   if (!sessions.list.some(s => s.id === sessions.currentId)) sessions.currentId = null;
-  let history = false, sending = false, composing = false, pending = null, draft = '', pauseMs = 1200, timer, disposed = false;
+  let signingOut = false, history = false, sending = false, composing = false, pending = null, draft = '', pauseMs = 1200, timer, disposed = false;
   const current = () => sessions.list.find(s => s.id === sessions.currentId) ?? null;
   const persist = () => { try { storage.setItem(STORE_KEY, JSON.stringify(sessions)); } catch { error = 'Could not save sessions on this device.'; } };
   const api = async (path, body) => {
@@ -47,7 +48,7 @@ function mountTeacherPhone(host, { storage }) {
   }
   async function send(text, requestId = null) {
     const value = String(text ?? '').trim();
-    if (!value || disposed || sending || composing) return;
+    if (!value || disposed || sending || signingOut || composing) return;
     clearTimeout(timer);
     if (!current()) newSession();
     sending = true; error = ''; draft = '';
@@ -70,7 +71,7 @@ function mountTeacherPhone(host, { storage }) {
     const focused = Boolean(active && host.contains(active) && active.dataset?.tcInput !== undefined);
     const caret = focused ? active.selectionStart : null;
     const session = current();
-    host.innerHTML = `<main class="tc-app"><header class="tc-header"><span class="wordmark">Mimi</span><span class="tc-actions"><button type="button" data-tc="history">${history ? 'Back' : 'History'}</button><button type="button" data-tc="new">New chat</button><button type="button" data-tc="logout">Sign out</button></span></header><div class="tc-body">${history
+    host.innerHTML = `<main class="tc-app"><header class="tc-header"><span class="wordmark">Mimi</span><span class="tc-actions"><button type="button" data-tc="history">${history ? 'Back' : 'History'}</button><button type="button" data-tc="new">New chat</button><button type="button" data-tc="logout" ${signingOut ? 'disabled' : ''}>Sign out</button></span></header><div class="tc-body">${history
       ? `<section class="tc-sessions">${sessions.list.map(s => `<button type="button" class="tc-session ${s.id === sessions.currentId ? 'is-current' : ''}" data-tc-session="${esc(s.id)}"><strong>${esc(s.title || 'New chat')}</strong><small>${esc(new Date(s.createdAt).toLocaleString('en-GB'))}</small></button>`).join('') || '<p class="tc-empty">No conversations yet.</p>'}</section>`
       : `<section class="tc-chat ${!session ? 'is-empty' : ''}" aria-label="Conversation"><div class="tc-scroll" data-tc-scroll>${session ? session.lines.map(line => `<div class="tc-line ${line.role === 'teacher' ? 'tc-teacher' : 'tc-mimi'}">${esc(line.text)}</div>`).join('') : ''}</div><footer class="tc-composer"><textarea data-tc-input rows="1" aria-label="Message Mimi" placeholder="Message Mimi" ${sending ? 'readonly' : ''}>${esc(draft)}</textarea>${sending ? '<p class="tc-hint" role="status">Sending…</p>' : ''}</footer></section>`}</div>${error ? `<p class="tc-error" role="alert">${esc(error)}${pending ? ' <button type="button" data-tc="retry">Try again</button>' : ''}</p>` : ''}</main>`;
     const input = host.querySelector('[data-tc-input]');
@@ -90,12 +91,18 @@ function mountTeacherPhone(host, { storage }) {
   }
   async function click(event) {
     const button = event.target.closest('[data-tc], [data-tc-session]');
-    if (!button || sending) return;
+    if (!button || button.disabled) return;
+    if (button.dataset.tc === 'logout') {
+      signingOut = true; clearTimeout(timer); button.disabled = true;
+      try { await signOut(); }
+      catch (e) { signingOut = false; error = e.message; render(); }
+      return;
+    }
+    if (sending || signingOut) return;
     if (button.dataset.tc === 'retry' && pending) { void send(pending.text, pending.requestId); return; }
     if (button.dataset.tcSession) { sessions.currentId = button.dataset.tcSession; history = false; persist(); }
     if (button.dataset.tc === 'new') { clearTimeout(timer); draft = ''; pending = null; composing = false; error = ''; newSession(); }
     if (button.dataset.tc === 'history') history = !history;
-    if (button.dataset.tc === 'logout') { try { await api('/api/student/logout', {}); } catch {} location.reload(); return; }
     render();
   }
   host.addEventListener('click', click);

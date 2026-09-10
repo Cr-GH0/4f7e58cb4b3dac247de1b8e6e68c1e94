@@ -27,3 +27,5 @@ body { color: var(--ink); }
 .editor-preview header span { font-size: 12px; color: var(--muted); }
 .editor-preview iframe { border: 0; width: 100%; flex: 1; min-height: 400px; background: #fff; }
 @media (max-width: 950px) { .editor-workspace { grid-template-columns: 1fr; height: auto; } .editor-source { min-height: 600px; } .editor-preview { min-height: 650px; } .editor-header > div { gap: 12px; } .editor-header h1 { font-size: 17px; } .editor-header nav { gap: 12px; } }
+
+#sign-out { min-width: auto; border-color: transparent; background: transparent; color: var(--muted); }

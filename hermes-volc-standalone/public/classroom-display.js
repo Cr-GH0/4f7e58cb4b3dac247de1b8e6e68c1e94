@@ -1,3 +1,4 @@
+import { signOut } from './sign-out.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const CHECKPOINT_KEY = 'mimi.show.checkpoint.v2';
@@ -17,7 +18,7 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     if (disposed) return;
     let stage = host.querySelector('[data-mimi-stage]');
     if (!stage) {
-      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="img" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
+      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><button type="button" class="mimi-stage__logout" data-mimi-logout>退出登录</button><p class="mimi-stage__logout-error" data-mimi-signout-error role="alert" hidden></p><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="img" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
       stage = host.querySelector('[data-mimi-stage]');
     }
     if (!stage) return;
@@ -234,7 +235,17 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   }
   async function poll() { while (!disposed) { await pollOnce(); await delay(700); } }
   const interact = () => { void arm(); };
-  const click = event => {
+  const click = async event => {
+    const logout = event.target.closest('[data-mimi-logout]');
+    if (logout) {
+      if (logout.disabled) return;
+      logout.disabled = true;
+      const notice = host.querySelector('[data-mimi-signout-error]');
+      notice.hidden = true;
+      try { await signOut({ beforeLeave: () => { disposed = true; token++; audio.stop(); } }); }
+      catch { logout.disabled = false; notice.textContent = '暂时无法退出，请重试。'; notice.hidden = false; }
+      return;
+    }
     if (event.target.closest('[data-mimi-return]') && completed || event.target.closest('[data-mimi-dismiss]')) void dismiss();
     if (event.target.closest('[data-mimi-retry]')) void retry();
   };

@@ -1,3 +1,4 @@
+import { signOut } from './sign-out.js';
 import { mountCoach } from './coach-view.js';
 import { mountTeacherConsole } from './teacher-console.js';
 import { ShowAudio } from './show-audio.js';
@@ -16,6 +17,7 @@ export function mountStudentEntry(host, options) {
   const loadRtc = () => { rtcPromise ??= options.loadRtc().catch(e => { rtcPromise = null; throw e; }); return rtcPromise; };
   let account = null, cleanup = null, destroyed = false;
   const teacherAudio = new ShowAudio();
+  const loginRequested = new URLSearchParams(globalThis.location?.search ?? '').has('login');
   let phase = 'loading', error = '', name = '', code = '', copied = false;
   const api = async (action, body) => {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 35000);
@@ -47,7 +49,7 @@ export function mountStudentEntry(host, options) {
     let content;
     if (phase === 'loading') content = '<h1>Opening your account</h1><p role="status">Connecting to Mimi…</p>';
     else if (account) content = `<h1>Your Mimi account</h1>${account.name ? `<p>${esc(account.name)}</p>` : ''}<label for="account-number">${teacher ? 'Your teacher account' : 'Your account number'}</label><input id="account-number" class="account-number" readonly value="${esc(account.accountName)}"><button data-entry="copy-account">${teacher ? 'Copy account name' : 'Copy account number'}</button>${copied ? `<p role="status">${teacher ? 'Account name copied.' : 'Account number copied.'}</p>` : ''}${teacher ? '' : '<p>Keep these four digits. Use them to sign in on another phone or browser.</p>'}<button class="primary" data-entry="enter">Go to Mimi</button><button data-entry="logout">Sign out</button>`;
-    else content = `<h1>Create your account</h1><p>You’ll get your own 4-digit account number and stay signed in.</p><label for="student-name">Your name (optional)</label><input id="student-name" maxlength="32" autocomplete="given-name" value="${esc(name)}"><button class="primary" data-entry="create" ${busy ? 'disabled' : ''}>${phase === 'creating' ? 'Creating your account…' : 'Create my account'}</button><details ${phase === 'signing-in' || code ? 'open' : ''}><summary>I already have an account</summary><form data-entry-form="login"><label for="login-account">4-digit number or teacher account</label><input id="login-account" name="code" placeholder="4-digit number or teacher account" autocomplete="username" spellcheck="false" value="${esc(code)}" required><button type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Signing in…' : 'Sign in'}</button></form></details>`;
+    else content = `<h1>Create your account</h1><p>You’ll get your own 4-digit account number and stay signed in.</p><label for="student-name">Your name (optional)</label><input id="student-name" maxlength="32" autocomplete="given-name" value="${esc(name)}"><button class="primary" data-entry="create" ${busy ? 'disabled' : ''}>${phase === 'creating' ? 'Creating your account…' : 'Create my account'}</button><details ${phase === 'signing-in' || code || loginRequested ? 'open' : ''}><summary>I already have an account</summary><form data-entry-form="login"><label for="login-account">4-digit number or teacher account</label><input id="login-account" name="code" placeholder="4-digit number or teacher account" autocomplete="username" spellcheck="false" value="${esc(code)}" required><button type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Signing in…' : 'Sign in'}</button></form></details>`;
     host.innerHTML = `<main class="student-entry"><a class="wordmark" href="/">Mimi</a><section aria-label="Mimi account">${content}${error ? `<p class="error-notice" role="alert">${esc(error)}</p><button data-entry="refresh">Try again</button>` : ''}</section></main>`;
   }
   async function click(event) {
@@ -59,7 +61,7 @@ export function mountStudentEntry(host, options) {
         account = (await api('register', { name })).account; phase = 'account';
       }
       if (action === 'enter') { enter(); return; }
-      if (action === 'logout') { await api('logout', {}); account = null; copied = false; code = ''; name = ''; phase = 'setup'; }
+      if (action === 'logout') { button.disabled = true; await signOut({ fetchFn }); return; }
       if (action === 'copy-account') {
         const field = host.querySelector('#account-number');
         field?.focus(); field?.select();
