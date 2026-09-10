@@ -20,11 +20,13 @@ import { fileStudentStore } from './student-store-node.js';
 import { studentRequest, currentStudent } from './student-api.js';
 import { createShowHandler } from './show-api.js';
 import { fileShowStore } from './show-store-node.js';
+import { fileShowSources } from './show-sources-node.js';
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
 const settingsStore = fileSettingsStore(join(__dirname, '.hermes-settings.json'));
 const students = fileStudentStore(join(__dirname, '.mimi-students.json'));
+const showSources = fileShowSources({ path: join(__dirname, '.mimi-show-sources.json'), htmlPath: join(PUBLIC_DIR, 'practice-report.html'), promptPath: join(__dirname, 'show-narration-prompt.md') });
 const showStore = fileShowStore({ statePath: join(__dirname, '.mimi-show-state.json'), contentPath: join(__dirname, 'show-content.json'), audioDir: join(__dirname, 'show-audio') });
 
 // ---------------------------------------------------------------------------
@@ -56,7 +58,7 @@ for (const [k, v] of Object.entries(CFG)) {
 const showHandler = createShowHandler({
   store: showStore, students, secret: CFG.appKey, password: process.env.HERMES_ADMIN_PASSWORD,
   settings: async () => (await settingsStore.current()).settings, speech: readSpeechCredentials(), arkKey: readArkKey(),
-  loadSources: async () => ({ prompt: await readFile(join(__dirname, 'show-narration-prompt.md'), 'utf8'), html: await readFile(join(PUBLIC_DIR, 'practice-report.html'), 'utf8') }),
+  sources: showSources, loadSources: () => showSources.current(),
 });
 
 // ---------------------------------------------------------------------------

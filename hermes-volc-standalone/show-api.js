@@ -28,8 +28,15 @@ const originAllowed = (request, url) => {
   return hosts.has(originHost);
 };
 
-export function createShowHandler({ store, students, secret, password, settings, speech, arkKey, loadSources, fetcher = fetch }) {
+export function createShowHandler({ store, students, secret, password, settings, speech, arkKey, sources, loadSources, fetcher = fetch }) {
   const narrator = loadSources ? createNarrationGenerator({ store, settings, speech, arkKey, loadSources, fetcher }) : null;
+  let openingRetryAt = 0;
+  const warmOpening = () => {
+    if (narrator && Date.now() >= openingRetryAt) {
+      openingRetryAt = Date.now() + 60000;
+      void narrator.prepareOpening().catch(() => {});
+    }
+  };
   return async function showRequest(request) {
     const url = new URL(request.url), path = url.pathname;
     const headers = { 'Cache-Control': 'no-store' };
@@ -79,27 +86,64 @@ export function createShowHandler({ store, students, secret, password, settings,
       const teacher = await requireTeacher();
       if (!teacher) return json({ error: 'Sign in with the teacher account to use the classroom show.' }, 401);
 
+      if (path === '/api/show/editor') {
+        if (!sources) return json({ error: '当前服务不支持编辑课堂大屏。' }, 503);
+        if (request.method === 'GET') return json(await sources.current());
+        if (request.method === 'POST') {
+          const input = await request.json();
+          try { return json(await sources.save(input)); }
+          catch (error) { return json({ error: error.message }, 400); }
+        }
+      }
+      if (path === '/api/show/report' && request.method === 'GET') {
+        const state = await store.state();
+        if (Number(url.searchParams.get('version')) !== state.version) return json({ error: 'This report belongs to another session.' }, 409);
+        const source = state.sources ?? await loadSources?.();
+        if (!source?.html) return json({ error: 'The report is unavailable.' }, 404);
+        const html = /<base\b/i.test(source.html) ? source.html : /<head\b[^>]*>/i.test(source.html)
+          ? source.html.replace(/<head\b[^>]*>/i, '$&<base href="/">') : '<base href="/">' + source.html;
+        return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+      }
+
       if (path === '/api/show/say' && request.method === 'POST') {
         const input = await request.json().catch(() => ({}));
         const conversationId = typeof input.conversationId === 'string' ? input.conversationId.trim() : '';
         const text = typeof input.text === 'string' ? input.text.trim().slice(0, 500) : '';
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(conversationId) || !text) return json({ error: 'Say something first.' }, 400);
-        const result = await store.trigger(conversationId, text);
+        const requestId = input.requestId ?? conversationId;
+        if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) return json({ error: 'Invalid message.' }, 400);
+        const result = await store.trigger(requestId, text, await loadSources?.());
         if (result.busy) return json({ reply: 'The report is still playing.' });
         if (!result.created) return json({ reply: (await store.loadContent()).teacherLines.alreadyDone });
         if (narrator) void narrator.ensure(result.data);
+        warmOpening();
         return json({ reply: (await store.loadContent()).teacherLines.acknowledged, version: result.data.version });
       }
       if (path === '/api/show/state' && request.method === 'GET') {
+        warmOpening();
         const state = await store.state();
         const content = await store.loadContent();
         if (narrator && state.active && !['ready', 'error'].includes(state.performance?.status)) void narrator.ensure(state);
         return json({
-          version: state.version, active: state.active, triggerText: state.triggerText,
+          version: state.version, active: state.active, dismissed: state.dismissed, triggerText: state.triggerText,
           lastSegment: state.lastSegment, checkpoint: state.checkpoint, startedAt: state.startedAt, audioReady: content.narrationMode === 'dynamic' ? state.performance?.status === 'ready' : await store.audioReady(),
           narrationStatus: state.performance?.status, narrationError: state.performance?.error,
           contentRevision: await store.contentRevision?.(),
         });
+      }
+      if (path === '/api/show/opening' && request.method === 'GET') {
+        const bytes = narrator ? await narrator.prepareOpening() : await store.readAudio('ack');
+        if (!bytes) return json({ error: 'Mimi’s voice is not ready yet.' }, 503);
+        return new Response(bytes, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
+      }
+      if (['/api/show/dismiss', '/api/show/retry'].includes(path) && request.method === 'POST') {
+        const input = await request.json();
+        if (!Number.isInteger(input.version)) return json({ error: 'Invalid report.' }, 400);
+        if (path.endsWith('/retry') && !narrator) return json({ error: 'Mimi cannot prepare the explanation right now.' }, 503);
+        const state = path.endsWith('/dismiss') ? await store.dismiss(input.version) : await store.retry(input.version);
+        if (!state) return json({ error: 'This report has changed. Please try again.' }, 409);
+        if (path.endsWith('/retry') && narrator) void narrator.ensure(state);
+        return json({ ok: true, version: state.version });
       }
       if (path === '/api/show/progress' && request.method === 'POST') {
         const input = await request.json().catch(() => ({}));
@@ -126,10 +170,18 @@ export function createShowHandler({ store, students, secret, password, settings,
         return json({ ok: true });
       }
       if (path === '/api/show/content' && request.method === 'GET') {
-        const content = await store.loadContent();
+        let content = await store.loadContent();
         const state = await store.state();
         if (url.searchParams.has('version') && Number(url.searchParams.get('version')) !== state.version) return json({ error: 'This report has been replaced by a newer session.' }, 409);
-        return json(content.narrationMode === 'dynamic' ? { ...content, version: state.version, contentRevision: await store.contentRevision?.(), narration: state.performance?.narration ?? [], narrationStatus: state.performance?.status ?? 'pending', narrationError: state.performance?.error, audioReady: state.performance?.status === 'ready' } : content);
+        if (state.sources) {
+          content = { ...content, artifact: { ...content.artifact, url: '/api/show/report?version=' + state.version } };
+          if (state.sources.customHtml) content = {
+            ...content, artifact: { ...content.artifact, title: 'Mimi · Classroom report' },
+            traceSteps: ['Reviewing the stories', 'Selecting relevant details', 'Building the report', 'Opening the report'],
+            traceResults: ['Student conversations reviewed', 'Details selected for this report', 'Report prepared', 'Report ready'],
+          };
+        }
+        return json(content.narrationMode === 'dynamic' ? { ...content, version: state.version, dismissed: state.dismissed, contentRevision: await store.contentRevision?.(), narration: state.performance?.narration ?? [], narrationStatus: state.performance?.status ?? 'pending', narrationError: state.performance?.error, audioReady: state.performance?.status === 'ready' } : content);
       }
       const audioMatch = path.match(/^\/api\/show\/audio\/([a-z0-9-]+)$/);
       if (audioMatch && request.method === 'GET') {

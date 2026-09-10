@@ -5,12 +5,12 @@
     "desktopOffline": "The report will appear on the classroom screen.",
     "alreadyDone": "The report is ready."
   },
-  "ack": "On it.",
+  "ack": "I’ve noticed a few things. Give me a moment — I’ll put together a report.",
   "traceSteps": [
-    "Recalling our conversations",
-    "Choosing two examples",
-    "Connecting the details",
-    "Preparing the report"
+    "Reviewing the stories",
+    "Selecting two examples",
+    "Building the report",
+    "Opening the report"
   ],
   "report": {
     "title": "What helped me understand your stories",
@@ -42,15 +42,33 @@
     "speechRate": 0
   },
   "traceDurations": [
-    2100,
-    2900,
-    2700,
-    2300
+    1700,
+    2300,
+    3100,
+    2100
   ],
   "narrationMode": "dynamic",
   "artifact": {
     "url": "/practice-report.html",
     "filename": "practice-report.html",
     "title": "What helped me understand your stories"
-  }
+  },
+  "traceNotes": [
+    "Keeping the grammar slips in my little notebook.",
+    "Giving the useful details a place in the spotlight.",
+    "Staring the stubborn HTML elements into place.",
+    "Making a little room for myself in the corner."
+  ],
+  "traceTools": [
+    "read_conversations",
+    "select_examples",
+    "build_report",
+    "open_report"
+  ],
+  "traceResults": [
+    "20 student conversations reviewed",
+    "2 examples selected: China–Laos Railway · The President’s Cat",
+    "2 case comparisons and 3 revision prompts prepared",
+    "Report ready"
+  ]
 }

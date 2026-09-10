@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const emptyState = () => ({ version: 0, active: false, conversationId: null, triggerText: '', startedAt: null, lastSegment: 0, usedConversations: [] });
+const emptyState = () => ({ version: 0, active: false, dismissed: false, conversationId: null, triggerText: '', startedAt: null, lastSegment: 0, usedConversations: [] });
 
 function validateContent(content) {
   const encoder = new TextEncoder();
@@ -75,24 +75,26 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
   return {
     state: readState,
     contentRevision: async () => String((await stat(contentPath)).mtimeMs),
-    trigger: (conversationId, text) => mutate(data => {
+    trigger: (conversationId, text, sources = null) => mutate(data => {
       // The once-per-session rule is checked and written inside the same queued
       // mutation, so two concurrent says cannot both trigger.
       if (data.usedConversations.includes(conversationId)) return { created: false, data };
       if (data.active) return { created: false, busy: true, data };
       data.version += 1;
       data.active = true;
+      data.dismissed = false;
       data.conversationId = conversationId;
       data.triggerText = text;
       data.startedAt = new Date().toISOString();
       data.lastSegment = 0;
       data.checkpoint = { phase: 'ack', index: 0, offset: 0 };
       data.performance = null;
+      data.sources = sources && typeof sources.html === 'string' && typeof sources.prompt === 'string' ? structuredClone(sources) : null;
       data.usedConversations.push(conversationId);
       return { created: true, data };
     }),
     saveProgress: (version, segment) => mutate(data => {
-      if (data.version !== version) return data;
+      if (data.version !== version || !data.active || data.dismissed) return data;
       data.lastSegment = Math.max(data.lastSegment, segment);
       return data;
     }),
@@ -111,10 +113,33 @@ export function fileShowStore({ statePath, contentPath, audioDir }) {
       if (data.version === version) data.active = false;
       return data;
     }),
-    savePerformance: (version, patch) => mutate(data => {
-      if (data.version === version) data.performance = { ...data.performance, ...patch };
+    dismiss: version => mutate(data => {
+      if (data.version !== version) return null;
+      data.active = false;
+      data.dismissed = true;
       return data;
     }),
+    retry: version => mutate(data => {
+      if (data.version !== version || !data.active || data.dismissed || data.performance?.status !== 'error') return null;
+      data.performance = { ...data.performance, status: 'pending', error: null };
+      return data;
+    }),
+    savePerformance: (version, patch) => mutate(data => {
+      if (data.version === version && data.active && !data.dismissed) data.performance = { ...data.performance, ...patch };
+      return data;
+    }),
+    async readOpening(key) {
+      try {
+        if (await readFile(join(audioDir, 'opening.json'), 'utf8') !== key) return null;
+        return new Uint8Array(await readFile(audioFile('ack')));
+      } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    },
+    async writeOpening(bytes, key) {
+      await mkdir(audioDir, { recursive: true });
+      await writeFile(audioFile('ack') + '.tmp', bytes);
+      await rename(audioFile('ack') + '.tmp', audioFile('ack'));
+      await writeFile(join(audioDir, 'opening.json'), key, 'utf8');
+    },
     async writePerformanceAudio(version, entries) {
       if (!Number.isInteger(version) || version < 1) throw new Error('Invalid show version.');
       const dir = join(audioDir, String(version));

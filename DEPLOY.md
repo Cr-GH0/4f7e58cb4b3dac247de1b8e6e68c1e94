@@ -68,7 +68,8 @@ sudo systemctl enable --now mimi
 
 - `.mimi-students.json`：账号。
 - `.hermes-settings.json`：后台配置（存在时）。
-- `.mimi-show-state.json`：演示状态和播放进度。
+- `.mimi-show-state.json`：演示状态、播放进度和本轮使用的内容。
+- `.mimi-show-sources.json`：课堂大屏后台保存的 HTML 产物和 Hermes 提示词（存在时）。
 - `show-audio/`：每轮讲解音频。
 
 部署到容器或临时文件系统时，将上述运行文件所在目录放在持久存储中。学生会话内容保存在各自浏览器，换设备不会自动迁移。
@@ -81,11 +82,11 @@ node probe-show.mjs https://实际部署地址
 
 此命令只读检查入口、静态资源、报告、公开配置和登录边界，不创建账号或发起演示。
 
-电脑和教师手机用账号 `sunyumeng` 登录。电脑进入头像待机；教师手机输入一次总结要求后，大屏自动显示报告并连续讲解。模型生成、合成和音频加载均由系统处理，没有手动合成或启用声音的部署步骤。
+电脑和教师手机用账号 `sunyumeng` 登录。电脑进入头像待机；教师手机使用微信输入法将总结要求转成文字。课前在电脑页面点击一次，进入待机；收到手机消息后，大屏先播放 Mimi 的英语回应，显示四步准备过程，再打开报告并连续讲解。结束后点击头像返回待机。开场声音在待机时预先准备，模型生成、合成和音频加载由系统处理。若本轮中断，页面提供重试和返回待机。
 
 ## 更新内容与代码
 
-报告入口为 `public/practice-report.html`，讲解规则为 `show-narration-prompt.md`，数据为 `show-content.json`。更改内容后同步独立样张，下一轮新会话使用新内容；不要替换正在播放的本轮内容。
+默认报告为 `public/practice-report.html`，默认讲解规则为 `show-narration-prompt.md`，数据为 `show-content.json`。教师也可从桌面待机页的“后台”编辑 HTML 和 Hermes 提示词；后台保存的内容优先生效，下一轮请求使用新内容。更改内容后同步独立样张，下一轮新会话使用新内容；不要替换正在播放的本轮内容。
 
 ```bash
 git pull --ff-only

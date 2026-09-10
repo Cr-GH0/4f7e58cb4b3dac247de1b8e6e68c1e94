@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mimi · 课堂大屏后台</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/coach.css"><link rel="stylesheet" href="/show-editor.css"></head>
+<body><main class="editor-app">
+<header class="editor-header"><div><span class="wordmark">Mimi</span><h1>课堂大屏后台</h1></div><nav><a href="/">返回大屏</a><button id="save" class="primary" disabled>保存</button></nav></header>
+<p class="editor-status" id="status" role="status">正在读取当前内容…</p>
+<div class="editor-workspace"><section class="editor-source" aria-label="内容编辑">
+<div class="editor-tabs" role="tablist" aria-label="编辑内容"><button type="button" role="tab" id="tab-html" aria-selected="true" aria-controls="panel-html">HTML 产物</button><button type="button" role="tab" id="tab-prompt" aria-selected="false" aria-controls="panel-prompt">Hermes 提示词</button></div>
+<div id="panel-html" class="editor-panel" role="tabpanel" aria-labelledby="tab-html"><div class="editor-field-heading"><label for="html">大屏展示的 HTML</label><label class="import-button" for="import-html">导入 HTML 文件<input id="import-html" type="file" accept=".html,.htm,text/html" disabled></label></div><p>可导入文件，或直接修改下方内容。右侧随修改更新预览。</p><textarea id="html" spellcheck="false" disabled></textarea></div>
+<div id="panel-prompt" class="editor-panel" role="tabpanel" aria-labelledby="tab-prompt" hidden><label for="prompt">这一部分的讲解要求</label><p>说明角色、内容重点和表达要求。Hermes 每轮结合 HTML 产物生成讲解。</p><textarea id="prompt" spellcheck="false" disabled></textarea></div>
+</section><section class="editor-preview" aria-label="产物预览"><header><h2>产物预览</h2><span>保存后从下一轮演示生效</span></header><iframe id="preview" title="HTML 产物预览" sandbox="allow-scripts"></iframe></section></div>
+</main><script type="module" src="/show-editor.js"></script></body></html>

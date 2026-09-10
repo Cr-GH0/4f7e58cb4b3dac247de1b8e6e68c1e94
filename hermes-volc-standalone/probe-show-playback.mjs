@@ -14,8 +14,8 @@ import { mountTeacherConsole } from './public/teacher-console.js';
 const configuredContent = JSON.parse(await readFile(new URL('./show-content.json', import.meta.url), 'utf8'));
 const content = { ...configuredContent, narrationMode: 'static', artifact: undefined, narration: ['intro','case1','case2','method'].map(id => ({ id, text: 'The ' + id + ' explanation.' })) };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(predicate, message) {
-  const deadline = Date.now() + 3500;
+async function until(predicate, message, timeout = 3500) {
+  const deadline = Date.now() + timeout;
   while (!predicate() && Date.now() < deadline) await pause(5);
   assert.ok(predicate(), message);
 }
@@ -123,19 +123,22 @@ test('missing audio fails preparation instead of falling back to silent timers',
   audio.dispose();
 });
 
-function consoleFixture({ snapshot = { version: 0, active: false }, saved = null, phone = false, narrowDesktop = false, blocked = false, runtimeContent } = {}) {
+function consoleFixture({ snapshot = { version: 0, active: false }, saved = null, phone = false, narrowDesktop = false, blocked = false, holdSay = false, runtimeContent } = {}) {
   const originals = Object.fromEntries(['window', 'document', 'matchMedia', 'fetch'].map(k => [k, globalThis[k]]));
   const ctx = new Context();
   if (blocked) ctx.resume = async () => { throw new Error('Autoplay blocked'); };
   let generated = runtimeContent ?? { ...configuredContent, version: snapshot.version, narration: content.narration, narrationStatus: 'ready', audioReady: true };
+  generated = { ...generated, traceSteps: ['Reading the room', 'Finding the bright spots', 'Polishing the feedback', 'Packing the report'], traceNotes: ['One moment...', 'Good things are taking shape.', 'Nearly there.', 'Ready for take-off.'], traceDurations: [5, 5, 5, 5] };
   const memory = new Map(saved ? [['mimi.show.checkpoint.v2', JSON.stringify(saved)]] : []);
   const storage = { getItem: k => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };
   const listeners = new Map(), inputEvents = new Map();
-  const input = { value: '', addEventListener: (type, fn) => inputEvents.set(type, fn), focus() {}, setSelectionRange() {} };
+  const input = { value: '', readOnly: false, addEventListener: (type, fn) => inputEvents.set(type, fn), focus() {}, setSelectionRange() {} };
   const classes = new Set(), styles = new Map(), sectionVisits = [], embeddedStyles = [];
   let stage = null, frame = null, markup = '', reportMarkup = '', reportWrites = 0, hostWrites = 0, offline = false;
   const presence = { style: { setProperty: (k, v) => styles.set(k, v) }, setAttribute() {} };
-  const notice = { hidden: true, textContent: '' };
+  const notice = { hidden: true, textContent: '' }, errorText = { textContent: '' };
+  const returnButton = { hidden: true, disabled: false };
+  const work = { hidden: true }, steps = { innerHTML: '' }, note = { textContent: '' };
   const frameDoc = {
     getElementById: id => embeddedStyles.find(s => s.id === id), createElement: () => ({}), head: { append: s => embeddedStyles.push(s) },
     scrollingElement: { scrollTop: 0 }, querySelectorAll: () => ['case1','case2'].map(id => ({ scrollIntoView: () => sectionVisits.push(id) })),
@@ -157,13 +160,22 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
       markup = value; hostWrites++;
       if (value.includes('data-mimi-stage')) stage = {
         dataset: { phase: 'idle' }, classList: { toggle: (k, v) => v ? classes.add(k) : classes.delete(k), contains: k => classes.has(k) },
-        querySelector: s => s === '[data-mimi-presence]' ? presence : s === '[data-mimi-error]' ? notice : s === '[data-mimi-report]' ? report : null,
+        querySelector: s => s === '[data-mimi-presence]' ? presence
+          : s === '[data-mimi-return]' ? returnButton
+          : s === '[data-mimi-error]' ? notice
+          : s === '[data-mimi-error-text]' ? errorText
+          : s === '[data-mimi-work]' ? work
+          : s === '[data-mimi-steps]' ? steps
+          : s === '[data-mimi-note]' ? note
+          : s === '[data-mimi-report]' ? report : null,
       }; else stage = null;
     },
     contains: () => false, addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: type => listeners.delete(type),
     querySelector: s => s === '[data-mimi-stage]' ? stage : s === '[data-mimi-presence]' ? presence : s === '[data-mimi-report-frame]' ? frame : s === '[data-tc-input]' && markup.includes('<textarea') ? input : null,
   };
   const progress = [], calls = [];
+  let releaseSay;
+  const sayGate = holdSay ? new Promise(resolve => { releaseSay = resolve; }) : null;
   globalThis.window = { AudioContext: function () { return ctx; } };
   globalThis.document = { activeElement: null, hidden: false, addEventListener() {}, removeEventListener() {} };
   globalThis.matchMedia = query => ({ matches: !phone && (!narrowDesktop || query.includes('pointer')), addEventListener() {}, removeEventListener() {} });
@@ -171,17 +183,21 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
     calls.push(path);
     if (offline) throw new Error('offline');
     if (path === '/api/show/progress') { progress.push(JSON.parse(options.body)); return Response.json({ ok: true }); }
-    if (path === '/api/show/say') { calls.push(JSON.parse(options.body)); return Response.json({ reply: 'I’m preparing the report.', version: 1 }); }
+    if (path === '/api/show/dismiss') { Object.assign(snapshot, { active: false, dismissed: true }); return Response.json({ ok: true }); }
+    if (path === '/api/show/say') { calls.push(JSON.parse(options.body)); if (sayGate) await sayGate; return Response.json({ reply: 'I’m preparing the report.', version: 1 }); }
     if (path.startsWith('/api/show/state')) return Response.json(snapshot);
     if (path.startsWith('/api/show/content')) return Response.json(generated);
-    if (path.startsWith('/api/show/audio/')) return new Response(new Uint8Array([1]));
+    if (path === '/api/show/opening' || path.startsWith('/api/show/audio/')) return new Response(new Uint8Array([1]));
     return Response.json({});
   };
   const dispose = mountTeacherConsole(host, { storage });
-  return { host, ctx, progress, memory, snapshot, report, notice, styles, sectionVisits, calls, embeddedStyles,
+  return { host, ctx, progress, memory, snapshot, report, notice, work, steps, note, returnButton, styles, sectionVisits, calls, embeddedStyles,
     stage: () => stage, frame: () => frame, writes: () => ({ reportWrites, hostWrites }), setContent: value => { generated = value; },
-    offline: value => { offline = value; }, interact: () => listeners.get('keydown')?.(),
-    type: value => { input.value = value; inputEvents.get('input')(); }, enter: () => inputEvents.get('keydown')({ key: 'Enter', shiftKey: false, preventDefault() {} }),
+    offline: value => { offline = value; }, interact: () => listeners.get('keydown')?.(), releaseSay: () => releaseSay?.(),
+    type: (value, isComposing = false) => { input.value = value; inputEvents.get('input')({ isComposing }); },
+    compositionStart: () => inputEvents.get('compositionstart')(), compositionEnd: value => { input.value = value; inputEvents.get('compositionend')(); },
+    enter: ({ isComposing = false, keyCode = 13 } = {}) => inputEvents.get('keydown')({ key: 'Enter', shiftKey: false, isComposing, keyCode, preventDefault() {} }),
+    click: target => listeners.get('click')?.({ target: { closest: selector => selector === target ? {} : null } }),
     cleanup: async () => { dispose(); await pause(30); for (const [key, value] of Object.entries(originals)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } },
   };
 }
@@ -192,7 +208,8 @@ test('idle desktop shows only the avatar, including in a narrow desktop window',
     await until(() => f.calls.includes('/api/show/state'), 'desktop listens for the phone');
     assert.equal(f.stage().dataset.phase, 'idle');
     assert.ok(f.host.innerHTML.includes('src="/mimi.png"'));
-    assert.ok(!/<textarea|<button|tc-chat|tc-header/.test(f.host.innerHTML));
+    assert.ok(!/<textarea|tc-chat|tc-header/.test(f.host.innerHTML));
+    assert.equal(f.returnButton.hidden, true);
     assert.equal(f.report.hidden, true);
     assert.equal(f.ctx.sources.length, 0);
   } finally { await f.cleanup(); }
@@ -213,16 +230,52 @@ test('phone retains auto-created sessions and sends the summary command without 
   } finally { await f.cleanup(); }
 });
 
-test('phone trigger moves from generating avatar to full-window report and real spoken animation', async () => {
+test('phone waits for IME composition to finish and blocks duplicate requests while sending', async () => {
+  const f = consoleFixture({ phone: true, holdSay: true });
+  try {
+    f.compositionStart();
+    f.type('Please summarize', true);
+    f.enter({ isComposing: true, keyCode: 229 });
+    await pause(40);
+    assert.equal(f.calls.filter(c => typeof c === 'object').length, 0, 'composition must not submit partial text');
+    f.compositionEnd('Please summarize the practice.');
+    f.enter();
+    await until(() => f.calls.some(c => typeof c === 'object'), 'finalized composition submits once');
+    assert.match(f.host.innerHTML, /textarea[^>]*readonly/);
+    f.enter();
+    f.type('duplicate while sending');
+    await pause(40);
+    assert.equal(f.calls.filter(c => typeof c === 'object').length, 1, 'readonly sending state cannot create a duplicate request');
+    f.releaseSay();
+    await until(() => f.host.innerHTML.includes('preparing the report'), 'request completes');
+  } finally { await f.cleanup(); }
+});
+
+test('phone trigger speaks acknowledgement, shows four silent work stages, presents report, narrates four sections, then returns to persistent idle', async () => {
   const state = { version: 0, active: false };
   const ready = { ...configuredContent, version: 1, narration: content.narration, narrationStatus: 'ready', audioReady: true };
   const f = consoleFixture({ snapshot: state, runtimeContent: { ...ready, narration: [], narrationStatus: 'generating', audioReady: false } });
   try {
     Object.assign(state, { version: 1, active: true, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
-    await until(() => f.stage().dataset.phase === 'generating', 'avatar shows generation');
+    await until(() => f.ctx.sources.length === 1, 'acknowledgement begins');
+    assert.equal(f.stage().dataset.phase, 'speaking');
     assert.equal(f.report.hidden, true);
+    assert.equal(f.work.hidden, true);
+    assert.deepEqual(f.calls.filter(path => typeof path === 'string' && (path === '/api/show/opening' || path.startsWith('/api/show/audio/'))), ['/api/show/opening']);
+    f.ctx.sources[0].onended();
+    await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 2), 'build call follows the first two results');
+    assert.equal((f.steps.innerHTML.match(/<li /g) ?? []).length, 3, 'future calls are not shown');
+    assert.match(f.steps.innerHTML, /20 student conversations reviewed/);
+    assert.match(f.steps.innerHTML, /2 examples selected/);
+    assert.ok(!f.steps.innerHTML.includes('open_report()'));
+    await pause(40);
+    assert.ok(!f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 3), 'opening aside cannot start before report and speech are ready');
+    assert.equal(f.report.hidden, true, 'report stays hidden until staged work completes');
+    assert.equal(f.ctx.sources.length, 1, 'tool-status text is never spoken');
     f.setContent(ready);
-    await until(() => f.ctx.sources.length === 1, 'speech begins automatically');
+    await until(() => f.steps.innerHTML.includes('open_report()'), 'final call appears only when ready');
+    for (const tool of ['read_conversations', 'select_examples', 'build_report', 'open_report']) assert.ok(f.steps.innerHTML.includes(`${tool}()`), `${tool} invocation is visible in the work list`);
+    await until(() => f.ctx.sources.length === 2, 'report narration begins after the work stages');
     assert.equal(f.stage().dataset.phase, 'speaking');
     assert.ok(f.stage().classList.contains('has-report'));
     assert.match(f.report.innerHTML, /src="\/practice-report.html"/);
@@ -232,7 +285,7 @@ test('phone trigger moves from generating avatar to full-window report and real 
     await until(() => Number(f.styles.get('--voice-level')) > 0, 'avatar responds to the audio signal');
     f.ctx.amplitude = 0;
     await until(() => Number(f.styles.get('--voice-level')) === 0, 'silence lowers the signal');
-    for (let i = 0; i < 4; i++) {
+    for (let i = 1; i <= 4; i++) {
       await until(() => f.ctx.sources.length === i + 1, 'next spoken section');
       assert.equal(f.frame(), frame); assert.equal(f.stage(), stage);
       f.ctx.sources[i].onended();
@@ -240,15 +293,17 @@ test('phone trigger moves from generating avatar to full-window report and real 
     await until(() => f.progress.some(p => p.checkpoint.phase === 'done'), 'ends only after audio ends');
     assert.equal(f.stage().dataset.phase, 'idle');
     assert.equal(f.report.hidden, false);
+    assert.equal(f.returnButton.hidden, false);
     assert.deepEqual(f.writes(), { reportWrites: 1, hostWrites: 1 });
     assert.deepEqual(f.sectionVisits, ['case1','case2','method']);
     assert.ok(f.embeddedStyles[0].textContent.includes('padding-right:max'));
-    f.setContent({ ...ready, version: 2 });
-    Object.assign(state, { version: 2, active: true, checkpoint: { phase: 'ack', index: 0, offset: 0 } });
-    await until(() => f.ctx.sources.length === 5, 'a new performance begins');
-    assert.equal(f.stage(), stage, 'avatar stays mounted');
-    assert.notEqual(f.frame(), frame, 'new performance reloads the current artifact');
-    assert.deepEqual(f.writes(), { reportWrites: 2, hostWrites: 1 });
+    f.click('[data-mimi-return]');
+    await until(() => f.report.hidden, 'clicking the completed avatar returns to standby');
+    assert.equal(f.stage(), stage, 'the same avatar remains mounted');
+    assert.equal(f.stage().dataset.phase, 'idle');
+    assert.ok(!f.stage().classList.contains('has-report'));
+    assert.equal(f.returnButton.hidden, true);
+    assert.equal(f.ctx.sources.length, 5, 'return does not replay speech');
   } finally { await f.cleanup(); }
 });
 
@@ -260,9 +315,22 @@ test('blocked audio keeps the full report and checkpoint, then resumes automatic
     assert.equal(f.ctx.sources.length, 0);
     assert.ok(!f.progress.some(p => p.checkpoint.phase === 'done'));
     f.ctx.resume = async () => { f.ctx.state = 'running'; };
-    await until(() => f.ctx.sources.length === 1, 'automatic retry resumes the saved position');
+    await until(() => f.ctx.sources.length === 1, 'automatic retry resumes the saved position', 5500);
     assert.equal(f.ctx.sources[0].offset, 4.2);
     assert.equal(f.stage().dataset.phase, 'speaking');
+  } finally { await f.cleanup(); }
+});
+
+test('trace resume continues from the saved stage without replaying acknowledgement or revealing the report', async () => {
+  const f = consoleFixture({ snapshot: { version: 1, active: true, checkpoint: { phase: 'trace', index: 2, offset: 0.003 } } });
+  try {
+    await until(() => f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 2), 'saved work stage resumes');
+    assert.equal(f.ctx.sources.length, 0, 'acknowledgement is not replayed after a trace checkpoint');
+    assert.equal(f.report.hidden, true);
+    assert.ok(!f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index < 2), 'completed work stages stay completed');
+    await until(() => f.ctx.sources.length === 1, 'narration begins after the remaining work stages');
+    assert.ok(f.progress.some(p => p.checkpoint.phase === 'trace' && p.checkpoint.index === 3));
+    assert.equal(f.report.hidden, false);
   } finally { await f.cleanup(); }
 });
 

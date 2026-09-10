@@ -10,6 +10,7 @@
 .hermes-settings.json*
 .mimi-students.json*
 .mimi-show-state.json*
+.mimi-show-sources.json*
 .mimi-classroom*
 show-audio/
 *.pem

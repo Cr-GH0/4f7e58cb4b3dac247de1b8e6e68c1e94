@@ -14,16 +14,29 @@ export class ShowAudio {
     await this.context.resume();
     if (!this.armed) throw new Error('Audio playback is unavailable.');
   }
-  async prepare(content) {
+  async prepareOpening() {
+    if (this.buffers.has('ack')) return;
+    if (this.openingJob) return this.openingJob;
+    this.openingJob = (async () => {
+      this.context ??= this.contextFactory();
+      const response = await this.fetcher('/api/show/opening', { cache: 'no-store', signal: AbortSignal.timeout(40000) });
+      if (!response.ok) throw new Error('Mimi’s voice is not ready yet.');
+      const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
+      if (!(buffer.duration > 0)) throw new Error('Mimi’s voice could not be loaded.');
+      this.buffers.set('ack', buffer);
+    })().finally(() => { this.openingJob = null; });
+    return this.openingJob;
+  }
+  async prepare(content, { opening = true } = {}) {
     this.context ??= this.contextFactory();
-    const entries = await Promise.all(['ack', ...content.narration.map(s => s.id)].map(async id => {
+    const entries = await Promise.all([...(opening ? ['ack'] : []), ...content.narration.map(s => s.id)].map(async id => {
       const response = await this.fetcher(`/api/show/audio/${id}${content.version ? '?version=' + content.version : ''}`, { cache: 'no-store', signal: AbortSignal.timeout(12000) });
       if (!response.ok) throw new Error('Audio is unavailable.');
       const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
       if (!(buffer.duration > 0)) throw new Error('The audio could not be decoded.');
       return [id, buffer];
     }));
-    this.buffers = new Map(entries);
+    this.buffers = new Map([...(this.buffers.has('ack') ? [['ack', this.buffers.get('ack')]] : []), ...entries]);
   }
   stop() {
     this.active?.cancel();

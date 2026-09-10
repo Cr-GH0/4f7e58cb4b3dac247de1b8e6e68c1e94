@@ -29,7 +29,7 @@ function mountTeacherPhone(host, { storage }) {
   try { sessions = JSON.parse(storage.getItem(STORE_KEY) ?? 'null') ?? sessions; }
   catch { error = 'Could not read your sessions on this device.'; }
   if (!sessions.list.some(s => s.id === sessions.currentId)) sessions.currentId = null;
-  let history = false, sending = false, draft = '', pauseMs = 1200, timer, disposed = false;
+  let history = false, sending = false, composing = false, pending = null, draft = '', pauseMs = 1200, timer, disposed = false;
   const current = () => sessions.list.find(s => s.id === sessions.currentId) ?? null;
   const persist = () => { try { storage.setItem(STORE_KEY, JSON.stringify(sessions)); } catch { error = 'Could not save sessions on this device.'; } };
   const api = async (path, body) => {
@@ -45,19 +45,21 @@ function mountTeacherPhone(host, { storage }) {
     history = false;
     persist();
   }
-  async function send(text) {
+  async function send(text, requestId = null) {
     const value = String(text ?? '').trim();
-    if (!value || disposed) return;
-    if (sending) { draft = value; render(); return; }
+    if (!value || disposed || sending || composing) return;
+    clearTimeout(timer);
     if (!current()) newSession();
     sending = true; error = ''; draft = '';
     const session = current();
-    session.lines.push({ role: 'teacher', text: value });
+    if (!requestId) session.lines.push({ role: 'teacher', text: value });
+    pending = { text: value, requestId: requestId ?? newSessionId() };
     if (!session.title) session.title = value.slice(0, 16);
     persist(); render();
     try {
-      const result = await api('/api/show/say', { conversationId: session.id, text: value });
+      const result = await api('/api/show/say', { conversationId: session.id, requestId: pending.requestId, text: value });
       session.lines.push({ role: 'mimi', text: result.reply });
+      pending = null;
       persist();
     } catch (e) { error = e.message; }
     sending = false; render();
@@ -70,24 +72,28 @@ function mountTeacherPhone(host, { storage }) {
     const session = current();
     host.innerHTML = `<main class="tc-app"><header class="tc-header"><span class="wordmark">Mimi</span><span class="tc-actions"><button type="button" data-tc="history">${history ? 'Back' : 'History'}</button><button type="button" data-tc="new">New chat</button><button type="button" data-tc="logout">Sign out</button></span></header><div class="tc-body">${history
       ? `<section class="tc-sessions">${sessions.list.map(s => `<button type="button" class="tc-session ${s.id === sessions.currentId ? 'is-current' : ''}" data-tc-session="${esc(s.id)}"><strong>${esc(s.title || 'New chat')}</strong><small>${esc(new Date(s.createdAt).toLocaleString('en-GB'))}</small></button>`).join('') || '<p class="tc-empty">No conversations yet.</p>'}</section>`
-      : `<section class="tc-chat ${!session ? 'is-empty' : ''}" aria-label="Conversation"><div class="tc-scroll" data-tc-scroll>${session ? session.lines.map(line => `<div class="tc-line ${line.role === 'teacher' ? 'tc-teacher' : 'tc-mimi'}">${esc(line.text)}</div>`).join('') : ''}</div><footer class="tc-composer"><textarea data-tc-input rows="1" aria-label="Message Mimi" placeholder="Message Mimi">${esc(draft)}</textarea>${sending ? '<p class="tc-hint" role="status">Sending…</p>' : ''}</footer></section>`}</div>${error ? `<p class="tc-error" role="alert">${esc(error)}</p>` : ''}</main>`;
+      : `<section class="tc-chat ${!session ? 'is-empty' : ''}" aria-label="Conversation"><div class="tc-scroll" data-tc-scroll>${session ? session.lines.map(line => `<div class="tc-line ${line.role === 'teacher' ? 'tc-teacher' : 'tc-mimi'}">${esc(line.text)}</div>`).join('') : ''}</div><footer class="tc-composer"><textarea data-tc-input rows="1" aria-label="Message Mimi" placeholder="Message Mimi" ${sending ? 'readonly' : ''}>${esc(draft)}</textarea>${sending ? '<p class="tc-hint" role="status">Sending…</p>' : ''}</footer></section>`}</div>${error ? `<p class="tc-error" role="alert">${esc(error)}${pending ? ' <button type="button" data-tc="retry">Try again</button>' : ''}</p>` : ''}</main>`;
     const input = host.querySelector('[data-tc-input]');
     if (focused && input) { input.focus({ preventScroll: true }); if (caret !== null) input.setSelectionRange(caret, caret); }
     const scroller = host.querySelector('[data-tc-scroll]');
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    input?.addEventListener('input', () => {
+    const schedule = () => { clearTimeout(timer); if (!composing && !sending && draft.trim()) timer = setTimeout(() => void send(draft), pauseMs); };
+    input?.addEventListener('compositionstart', () => { composing = true; clearTimeout(timer); });
+    input?.addEventListener('compositionend', () => { composing = false; draft = input.value; schedule(); });
+    input?.addEventListener('input', event => {
       draft = input.value; clearTimeout(timer);
-      if (draft.trim()) timer = setTimeout(() => void send(draft), pauseMs);
+      if (!event.isComposing) schedule();
     });
     input?.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); clearTimeout(timer); void send(draft); }
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing && event.keyCode !== 229) { event.preventDefault(); clearTimeout(timer); void send(draft); }
     });
   }
   async function click(event) {
     const button = event.target.closest('[data-tc], [data-tc-session]');
-    if (!button) return;
+    if (!button || sending) return;
+    if (button.dataset.tc === 'retry' && pending) { void send(pending.text, pending.requestId); return; }
     if (button.dataset.tcSession) { sessions.currentId = button.dataset.tcSession; history = false; persist(); }
-    if (button.dataset.tc === 'new') { clearTimeout(timer); draft = ''; newSession(); }
+    if (button.dataset.tc === 'new') { clearTimeout(timer); draft = ''; pending = null; composing = false; error = ''; newSession(); }
     if (button.dataset.tc === 'history') history = !history;
     if (button.dataset.tc === 'logout') { try { await api('/api/student/logout', {}); } catch {} location.reload(); return; }
     render();
