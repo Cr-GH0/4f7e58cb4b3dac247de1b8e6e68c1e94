@@ -36,7 +36,8 @@ export function mountCoach(host, options) {
   const drafts = createInputDrafts(options.storage ?? globalThis.localStorage);
   let panel = null, panelValue = null, filter = 'all';
   let focusReturn = null, panelScroll = 0, conversationId = null;
-  let submitting = false, autoTimer = null;
+  let submitting = false, composing = false, autoTimer = null;
+  let viewportFrame = null;
   void loadAutoSendPause();
   const draft = (c, field, owner = '', fallback = '') => esc(drafts.get(c.id,field,owner,fallback));
   const download = (text, filename, type = 'text/plain;charset=utf-8') => {
@@ -134,6 +135,7 @@ export function mountCoach(host, options) {
     } else if (focusedAction) {
       [...host.querySelectorAll('[data-action]')].find(el => el.dataset.action === focusedAction && el.dataset.value === focusedValue)?.focus({preventScroll:true});
     }
+    scheduleViewport();
   }
   function updateComposer() {
     const textarea = host.querySelector('#message-text');
@@ -143,16 +145,34 @@ export function mountCoach(host, options) {
     send.disabled = submitting || ['connecting','ending'].includes(state.phase) || !textarea.value.trim();
     // Re-measure after text, viewport, or transcript changes, including shrink.
     const top = textarea.scrollTop;
+    const caretAtEnd = document.activeElement === textarea && textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length;
+    const transcript = host.querySelector('.conversation-scroll');
+    const atBottom = transcript && transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 70;
     textarea.style.height = '0px';
     textarea.style.height = `${textarea.scrollHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > textarea.clientHeight ? 'auto' : 'hidden';
-    textarea.scrollTop = top;
+    textarea.scrollTop = caretAtEnd ? textarea.scrollHeight : top;
+    if (atBottom) transcript.scrollTop = transcript.scrollHeight;
   }
   function updateViewport() {
     const viewport = window.visualViewport;
-    const available = viewport?.scale === 1 ? Math.min(innerHeight,viewport.height) : innerHeight;
+    const unzoomed = viewport && Math.abs(viewport.scale - 1) < .01;
+    const available = unzoomed ? Math.min(innerHeight,viewport.height) : innerHeight;
+    const scroll = host.querySelector('.conversation-scroll');
+    const atBottom = scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 70;
+    const editing = host.contains(document.activeElement) && document.activeElement.matches('textarea,input');
+    host.dataset.coachViewport = '';
+    host.dataset.compactViewport = String(available < 520 || (editing && innerHeight - available > 120));
     host.style.setProperty('--app-height',`${available}px`);
+    // iOS may pan the visual viewport when the keyboard opens, without
+    // resizing or scrolling the layout viewport that fixed elements use.
+    host.style.setProperty('--app-offset-top',`${unzoomed ? viewport.offsetTop : 0}px`);
     updateComposer();
+    if (atBottom) scroll.scrollTop = scroll.scrollHeight;
+  }
+  function scheduleViewport() {
+    if (viewportFrame !== null) return;
+    viewportFrame = requestAnimationFrame(() => { viewportFrame = null; updateViewport(); });
   }
   // The composer sends itself after a typing pause, so a phone voice keyboard
   // that drops text into the box needs no extra tap. Only user input (re)arms
@@ -160,17 +180,17 @@ export function mountCoach(host, options) {
   function scheduleAutoSend() {
     clearTimeout(autoTimer);
     const textarea = host.querySelector('#message-text');
-    if (textarea && textarea.value.trim()) autoTimer = setTimeout(autoSend, sendPause());
+    if (!composing && textarea && textarea.value.trim()) autoTimer = setTimeout(autoSend, sendPause());
   }
   async function autoSend() {
-    if (submitting) return;
+    if (submitting || composing) return;
     const textarea = host.querySelector('#message-text');
     if (!textarea || !textarea.value.trim()) return;
     if (['connecting','ending'].includes(runtime.getSnapshot().state.phase)) { scheduleAutoSend(); return; }
     await deliverComposer();
   }
   async function deliverComposer() {
-    if (submitting) return;
+    if (submitting || composing) return;
     const textarea = host.querySelector('#message-text');
     if (!textarea || !textarea.value.trim()) return;
     const {conversation:c,state} = runtime.getSnapshot();
@@ -221,7 +241,7 @@ export function mountCoach(host, options) {
   }
   async function submit(event) {
     const form = event.target.closest('form'); if (!form) return;
-    event.preventDefault(); if (submitting) return;
+    event.preventDefault(); if (submitting || composing) return;
     const data = new FormData(form), {conversation:c} = runtime.getSnapshot();
     const owner = panelValue;
     try {
@@ -245,15 +265,21 @@ export function mountCoach(host, options) {
     if (el.dataset.draft) {
       drafts.set(runtime.getSnapshot().conversation.id,el.dataset.draft,el.dataset.owner ?? '',el.value);
       host.querySelectorAll('.draft-error').forEach(node => { node.textContent = drafts.error; node.hidden = !drafts.error; });
-      if (el.id === 'message-text') { updateComposer(); scheduleAutoSend(); }
+      if (el.id === 'message-text') { updateComposer(); clearTimeout(autoTimer); if (!event.isComposing) scheduleAutoSend(); }
     }
+  }
+  function compositionStart(event) {
+    if (event.target.id === 'message-text') { composing = true; clearTimeout(autoTimer); }
+  }
+  function compositionEnd(event) {
+    if (event.target.id === 'message-text') { composing = false; input(event); }
   }
   function change(event) {
     input(event);
   }
   function keydown(event) {
     if (!panel && event.target.id === 'message-text') {
-      if (event.isComposing || event.keyCode === 229) return;
+      if (composing || event.isComposing || event.keyCode === 229) return;
       // Enter sends at once; Shift+Enter adds a new line. Composition keys from
       // voice keyboards pass through untouched.
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void autoSend(); }
@@ -271,14 +297,29 @@ export function mountCoach(host, options) {
   const pagehide = () => runtime.pagehide();
   host.addEventListener('click',click); host.addEventListener('submit',submit); host.addEventListener('input',input);
   host.addEventListener('change',change); host.addEventListener('keydown',keydown); window.addEventListener('pagehide',pagehide);
-  window.addEventListener('resize',updateViewport);
-  window.visualViewport?.addEventListener('resize',updateViewport);
+  host.addEventListener('compositionstart',compositionStart);
+  host.addEventListener('compositionend',compositionEnd);
+  host.addEventListener('focusin',scheduleViewport);
+  host.addEventListener('focusout',scheduleViewport);
+  window.addEventListener('resize',scheduleViewport);
+  window.visualViewport?.addEventListener('resize',scheduleViewport);
+  window.visualViewport?.addEventListener('scroll',scheduleViewport);
   const unsubscribe = runtime.subscribe(render); render();
   return () => {
     clearTimeout(autoTimer); unsubscribe(); runtime.destroy();
     host.removeEventListener('click',click); host.removeEventListener('submit',submit); host.removeEventListener('input',input);
     host.removeEventListener('change',change); host.removeEventListener('keydown',keydown); window.removeEventListener('pagehide',pagehide);
-    window.removeEventListener('resize',updateViewport);
-    window.visualViewport?.removeEventListener('resize',updateViewport);
+    host.removeEventListener('compositionstart',compositionStart);
+    host.removeEventListener('compositionend',compositionEnd);
+    host.removeEventListener('focusin',scheduleViewport);
+    host.removeEventListener('focusout',scheduleViewport);
+    window.removeEventListener('resize',scheduleViewport);
+    window.visualViewport?.removeEventListener('resize',scheduleViewport);
+    window.visualViewport?.removeEventListener('scroll',scheduleViewport);
+    if (viewportFrame !== null) cancelAnimationFrame(viewportFrame);
+    delete host.dataset.coachViewport;
+    delete host.dataset.compactViewport;
+    host.style.removeProperty('--app-height');
+    host.style.removeProperty('--app-offset-top');
   };
 }

@@ -31,6 +31,7 @@ function mountTeacherPhone(host, { storage }) {
   catch { error = 'Could not read your sessions on this device.'; }
   if (!sessions.list.some(s => s.id === sessions.currentId)) sessions.currentId = null;
   let signingOut = false, history = false, sending = false, composing = false, pending = null, draft = '', pauseMs = 1200, timer, disposed = false;
+  let viewportFrame = null;
   let resetting = false, resetRequest = null, resetNotice = '', resetEpoch = 0, sendGeneration = 0;
   const current = () => sessions.list.find(s => s.id === sessions.currentId) ?? null;
   const persist = () => { try { storage.setItem(STORE_KEY, JSON.stringify(sessions)); } catch { error = 'Could not save sessions on this device.'; } };
@@ -84,6 +85,31 @@ function mountTeacherPhone(host, { storage }) {
     } catch { resetNotice = '重置失败，请再次点击重试。'; }
     finally { resetting = false; render(); }
   }
+  function updateViewport() {
+    const viewport = window.visualViewport;
+    const unzoomed = viewport && Math.abs(viewport.scale - 1) < .01;
+    const available = unzoomed ? Math.min(innerHeight, viewport.height) : innerHeight;
+    const scroller = host.querySelector('[data-tc-scroll]');
+    const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 70;
+    host.dataset.teacherViewport = '';
+    host.dataset.compactViewport = String(available < 520);
+    host.style.setProperty('--app-height', `${available}px`);
+    host.style.setProperty('--app-offset-top', `${unzoomed ? viewport.offsetTop : 0}px`);
+    const input = host.querySelector('[data-tc-input]');
+    if (input) {
+      const top = input.scrollTop;
+      const caretAtEnd = document.activeElement === input && input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      input.style.height = '0px';
+      input.style.height = `${input.scrollHeight}px`;
+      input.style.overflowY = input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
+      input.scrollTop = caretAtEnd ? input.scrollHeight : top;
+    }
+    if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+  }
+  function scheduleViewport() {
+    if (viewportFrame !== null || !window.requestAnimationFrame) return;
+    viewportFrame = window.requestAnimationFrame(() => { viewportFrame = null; if (!disposed) updateViewport(); });
+  }
   function render() {
     if (disposed) return;
     const active = document.activeElement;
@@ -101,9 +127,10 @@ function mountTeacherPhone(host, { storage }) {
     input?.addEventListener('compositionstart', () => { composing = true; clearTimeout(timer); });
     input?.addEventListener('compositionend', () => { composing = false; draft = input.value; schedule(); });
     input?.addEventListener('input', event => {
-      draft = input.value; clearTimeout(timer);
+      draft = input.value; clearTimeout(timer); scheduleViewport();
       if (!event.isComposing) schedule();
     });
+    scheduleViewport();
     input?.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing && event.keyCode !== 229) { event.preventDefault(); clearTimeout(timer); void send(draft); }
     });
@@ -125,8 +152,21 @@ function mountTeacherPhone(host, { storage }) {
     if (button.dataset.tc === 'history') history = !history;
     render();
   }
+  host.addEventListener('focusin', scheduleViewport);
+  host.addEventListener('focusout', scheduleViewport);
+  window.addEventListener?.('resize', scheduleViewport);
+  window.visualViewport?.addEventListener('resize', scheduleViewport);
+  window.visualViewport?.addEventListener('scroll', scheduleViewport);
   host.addEventListener('click', click);
   void api('/api/config').then(c => { pauseMs = Math.min(5000, Math.max(300, Number(c.autoSendPauseMs) || 1200)); }).catch(() => {});
   render();
-  return () => { disposed = true; clearTimeout(timer); host.removeEventListener('click', click); };
+  return () => {
+    disposed = true; clearTimeout(timer); host.removeEventListener('click', click);
+    host.removeEventListener('focusin', scheduleViewport); host.removeEventListener('focusout', scheduleViewport);
+    window.removeEventListener?.('resize', scheduleViewport);
+    window.visualViewport?.removeEventListener('resize', scheduleViewport); window.visualViewport?.removeEventListener('scroll', scheduleViewport);
+    if (viewportFrame !== null) window.cancelAnimationFrame(viewportFrame);
+    if (host.dataset) { delete host.dataset.teacherViewport; delete host.dataset.compactViewport; }
+    host.style?.removeProperty('--app-height'); host.style?.removeProperty('--app-offset-top');
+  };
 }
