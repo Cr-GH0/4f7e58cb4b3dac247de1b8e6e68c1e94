@@ -44,7 +44,7 @@
 
 /* Desktop: the report occupies the window; the avatar is the only overlay. */
 .mimi-stage {
-  --avatar-size: clamp(280px, 34vmin, 420px);
+  --avatar-size: clamp(200px, 35vmin, 420px);
   --avatar-scale: .26;
   --avatar-right: max(24px, env(safe-area-inset-right));
   --avatar-bottom: max(24px, env(safe-area-inset-bottom));
@@ -53,6 +53,30 @@
   --stage-accent: var(--red);
   position: relative; isolation: isolate; width: 100%; height: calc(100 * var(--mimi-vh));
   overflow: hidden; background: var(--paper); color: var(--ink);
+}
+.mimi-stage::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 43%, #fffdfa00 16%, #fffdfa99 65%),
+    radial-gradient(ellipse at 40% 42%, #e4ecdf99 0%, transparent 43%),
+    radial-gradient(ellipse at 64% 48%, #f2dfd380 0%, transparent 42%),
+    linear-gradient(145deg, #faf8f1, #fffdfa 55%, #f4f0e8);
+}
+.mimi-stage::after {
+  content: ''; position: absolute; inset: 24px; pointer-events: none;
+  border: 1px solid #c9bb9e40; border-radius: 24px;
+}
+.mimi-stage.has-report::before, .mimi-stage.has-report::after { display: none; }
+.mimi-stage[data-phase="idle"]:not(.has-report) .mimi-presence {
+  transform: translate(calc(50vw - var(--avatar-size)/2), calc(calc(44 * var(--mimi-vh)) - var(--avatar-size)/2));
+}
+.mimi-presence__standby {
+  position: absolute; top: calc(100% + 58px); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: 90vw; margin: 0;
+  color: #4d5c54; font: 400 clamp(22px, 2.1vw, 32px)/1.4 var(--serif);
+  letter-spacing: .015em; text-align: center;
+}
+.mimi-presence__standby::before {
+  content: ''; display: block; width: 32px; height: 1px; margin: 0 auto 20px; background: #a99d7b;
 }
 .mimi-stage__report { position: absolute; inset: 0; background: var(--paper); animation: mimi-report-appear 480ms ease-out both; }
 .mimi-stage__report iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--paper); }
@@ -75,14 +99,17 @@
 .mimi-presence__portrait {
   width: 100%; height: 100%; padding: 8px; border: 1px solid var(--gold-line);
   border-radius: 50%; background: var(--paper);
-  box-shadow: 0 14px 50px #59452b0b;
+  box-shadow: 0 24px 70px #485b421a, 0 4px 16px #59452b08;
   transform: translateY(calc(var(--voice-motion)*-6px)) scale(calc(1 + var(--voice-motion)*.085));
   transition: transform 80ms linear;
 }
 .mimi-presence__portrait img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .mimi-presence__orbit {
-  position: absolute; inset: -18px; border: 2px solid var(--gold-line); border-radius: 50%;
+  position: absolute; inset: -22px; border: 1px solid #b8b79a; border-radius: 50%;
   opacity: .65; transition: opacity 250ms;
+}
+.mimi-presence__orbit::before {
+  content: ''; position: absolute; inset: -17px; border: 1px solid #c5bd9d40; border-radius: inherit;
 }
 .mimi-presence__orbit::after {
   content: ''; position: absolute; inset: -1px; border-radius: inherit;
@@ -151,16 +178,44 @@
 @keyframes mimi-call-appear { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .mimi-work li.is-current { animation: none; } }
 
-.mimi-stage__settings { position: absolute; z-index: 4; left: 24px; bottom: 22px; padding: 8px 12px; color: var(--muted); text-decoration: none; font-size: 13px; border-radius: 5px; }
-.mimi-stage__settings:hover, .mimi-stage__settings:focus-visible { color: var(--red-dark); background: var(--soft); }
-
-.mimi-stage__logout { position: absolute; z-index: 4; left: 94px; bottom: 22px; padding: 8px 12px; min-height: 36px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
-.mimi-stage__logout:hover, .mimi-stage__logout:focus-visible { color: var(--red-dark); background: var(--soft); }
-.mimi-stage__logout-error { position: absolute; z-index: 4; left: 24px; bottom: 64px; margin: 0; padding: 8px 12px; background: var(--paper); color: var(--red-dark); font-size: 13px; }
-
-.mimi-entry{position:absolute;z-index:8;left:50%;top:72%;transform:translateX(-50%);text-align:center;color:#455568;width:min(90%,520px)}
-.mimi-entry[hidden]{display:none}.mimi-entry p{font:16px/1.6 system-ui,sans-serif;margin:0 0 16px}
-.mimi-entry button{border:0;border-radius:24px;padding:12px 28px;background:#244d62;color:white;font:500 16px system-ui,sans-serif;cursor:pointer}
+.mimi-stage__controls { position: absolute; z-index: 8; top: max(40px, env(safe-area-inset-top)); right: max(40px, env(safe-area-inset-right)); }
+.mimi-stage__hamburger {
+  display: grid; place-items: center; width: 48px; height: 48px; margin-left: auto;
+  list-style: none; cursor: pointer; border: 1px solid #d3cbb880; border-radius: 50%;
+  color: #576356; background: #fffdfaaf; box-shadow: 0 4px 16px #485b4206;
+  transition: background 180ms, border-color 180ms;
+}
+.mimi-stage__hamburger::-webkit-details-marker { display: none; }
+.mimi-stage__hamburger svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+.mimi-stage__hamburger:hover, .mimi-stage__controls[open] .mimi-stage__hamburger { background: #fffdfa; border-color: #a9b19d; }
+.mimi-stage__panel {
+  position: absolute; right: 0; top: 60px; width: min(288px, calc(100vw - 48px));
+  max-height: calc(100 * var(--mimi-vh) - 132px); overflow: auto;
+  padding: 10px; border: 1px solid #ded7c8; border-radius: 18px;
+  background: #fffdfa; box-shadow: 0 18px 55px #36432b1a;
+}
+.mimi-stage__settings, .mimi-stage__logout {
+  display: flex; align-items: center; width: 100%; min-height: 44px; padding: 10px 14px;
+  border: 0; border-radius: 9px; color: #48544b; text-decoration: none;
+  background: transparent; font: 400 14px/1.5 system-ui, sans-serif; justify-content: flex-start;
+}
+.mimi-stage__settings:hover, .mimi-stage__logout:hover { background: #f0f2e9; }
+.mimi-stage__logout-error { margin: 8px 14px; color: var(--red-dark); font-size: 13px; }
+.mimi-entry { margin: 8px 4px 4px; padding: 16px 10px 6px; border-top: 1px solid var(--line); color: #58645c; }
+.mimi-entry p { font: 13px/1.6 system-ui, sans-serif; margin: 0 0 12px; overflow-wrap: anywhere; }
+.mimi-entry button { width: 100%; border: 0; border-radius: 10px; padding: 10px 16px; background: #52664f; color: white; font: 500 14px/1.5 system-ui, sans-serif; }
+.mimi-entry button:hover:not(:disabled) { background: #40553d; }
+@media (max-width: 600px), (max-height: 500px) {
+  .mimi-stage::after { inset: 12px; border-radius: 18px; }
+  .mimi-stage__controls { top: max(24px, env(safe-area-inset-top)); right: max(24px, env(safe-area-inset-right)); }
+  .mimi-presence__standby { top: calc(100% + 44px); font-size: 22px; }
+  .mimi-presence__standby::before { margin-bottom: 12px; }
+}
+@media (max-height: 450px) {
+  .mimi-stage { --avatar-size: 36vmin; }
+  .mimi-presence__standby { top: calc(100% + 32px); font-size: 19px; }
+  .mimi-presence__standby::before { display: none; }
+}
 
 .tc-reset{display:flex;align-items:center;gap:12px;flex-shrink:0;padding:8px 16px;border-bottom:1px solid var(--gold-line)}
 .tc-reset button{min-height:44px;padding:8px 12px;color:var(--report-red);border:1px solid var(--gold-line);border-radius:6px;white-space:nowrap}

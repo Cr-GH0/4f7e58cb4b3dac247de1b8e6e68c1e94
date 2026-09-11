@@ -142,6 +142,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
   const presence = { style: { setProperty: (k, v) => styles.set(k, v) }, setAttribute() {} };
   const notice = { hidden: true, textContent: '' }, errorText = { textContent: '' };
   const returnButton = { hidden: true, disabled: false };
+  const standby = { hidden: false }, controls = { open: false };
   const work = { hidden: true }, steps = { innerHTML: '' }, note = { textContent: '' };
   const frameDoc = {
     getElementById: id => embeddedStyles.find(s => s.id === id), createElement: () => ({}), head: { append: s => embeddedStyles.push(s) },
@@ -165,6 +166,8 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
       if (value.includes('data-mimi-stage')) stage = {
         dataset: { phase: 'idle' }, classList: { toggle: (k, v) => v ? classes.add(k) : classes.delete(k), contains: k => classes.has(k) },
         querySelector: s => s === '[data-mimi-presence]' ? presence
+          : s === '[data-mimi-standby]' ? standby
+          : s === '[data-mimi-controls]' ? controls
           : s === '[data-mimi-return]' ? returnButton
           : s === '[data-mimi-error]' ? notice
           : s === '[data-mimi-error-text]' ? errorText
@@ -213,7 +216,7 @@ function consoleFixture({ snapshot = { version: 0, active: false }, saved = null
   };
 }
 
-test('idle desktop shows only the avatar, including in a narrow desktop window', async () => {
+test('idle desktop shows the avatar and standby caption, including in a narrow desktop window', async () => {
   const f = consoleFixture({ narrowDesktop: true });
   try {
     await until(() => f.calls.some(p => typeof p === 'string' && p.startsWith('/api/show/state')), 'desktop listens for the phone');

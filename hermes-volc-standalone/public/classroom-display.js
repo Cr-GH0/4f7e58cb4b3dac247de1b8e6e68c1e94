@@ -26,12 +26,15 @@ export function mountClassroomDisplay(host, { storage, audio }) {
     if (disposed) return;
     let stage = host.querySelector('[data-mimi-stage]');
     if (!stage) {
-      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><button type="button" class="mimi-stage__logout" data-mimi-logout>退出登录</button><p class="mimi-stage__logout-error" data-mimi-signout-error role="alert" hidden></p><section class="mimi-entry" data-mimi-entry><p data-mimi-entry-text role="status"></p><button type="button" data-mimi-enter>进入课堂</button></section><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="img" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
+      host.innerHTML = `<main class="mimi-stage" data-mimi-stage data-phase="idle" aria-label="Mimi classroom display"><details class="mimi-stage__controls" data-mimi-controls><summary class="mimi-stage__hamburger" aria-label="Classroom controls"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></summary><div class="mimi-stage__panel"><a class="mimi-stage__settings" data-mimi-settings href="/show-editor.html" hidden>后台</a><button type="button" class="mimi-stage__logout" data-mimi-logout>退出登录</button><p class="mimi-stage__logout-error" data-mimi-signout-error role="alert" hidden></p><section class="mimi-entry" data-mimi-entry><p data-mimi-entry-text role="status"></p><button type="button" data-mimi-enter>进入课堂</button></section></div></details><section class="mimi-stage__report" data-mimi-report hidden aria-label="Practice report"></section><div class="mimi-presence" data-mimi-presence role="group" aria-label="Mimi"><div class="mimi-presence__orbit" aria-hidden="true"></div><div class="mimi-presence__breath"><div class="mimi-presence__portrait"><img src="/mimi.png" width="1254" height="1254" alt="" draggable="false" fetchpriority="high"></div></div><div class="mimi-presence__signal" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><p class="mimi-presence__standby" data-mimi-standby>Mimi is standing by</p><button type="button" class="mimi-presence__return" data-mimi-return aria-label="Return to standby" title="Return to standby" hidden></button></div><section class="mimi-work" data-mimi-work hidden aria-label="Mimi is working"><ol data-mimi-steps></ol><p class="mimi-work__note" data-mimi-note role="status"></p></section><div class="mimi-stage__error" data-mimi-error hidden><p data-mimi-error-text role="status"></p><button type="button" data-mimi-retry>Try again</button><button type="button" data-mimi-dismiss>Return to standby</button></div></main>`;
       stage = host.querySelector('[data-mimi-stage]');
     }
     if (!stage) return;
+    const leavingStandby = stage.dataset.phase === 'idle' && !stage.classList.contains('has-report') && (phase !== 'idle' || reportVisible);
     stage.classList.toggle('has-report', reportVisible);
     stage.dataset.phase = phase;
+    stage.querySelector('[data-mimi-standby]').hidden = phase !== 'idle' || reportVisible;
+    if (leavingStandby) stage.querySelector('[data-mimi-controls]').open = false;
     const gate = stage.querySelector('[data-mimi-entry]');
     if (gate) {
       gate.hidden = !gateMessage;
@@ -289,6 +292,17 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   window.addEventListener?.('pagehide', leaving);
   window.addEventListener?.('pageshow', returned);
   const interact = () => { void arm(); };
+  const closeControls = event => {
+    const controls = host.querySelector('[data-mimi-controls]');
+    if (!controls?.open) return;
+    if (event.type === 'keydown') {
+      if (event.key !== 'Escape') return;
+      controls.open = false;
+      controls.querySelector('summary').focus();
+    } else if (!controls.contains(event.target)) controls.open = false;
+  };
+  document.addEventListener('pointerdown', closeControls);
+  document.addEventListener('keydown', closeControls);
   const click = async event => {
     if (event.target.closest('[data-mimi-enter]')) {
       await arm();
@@ -320,5 +334,5 @@ export function mountClassroomDisplay(host, { storage, audio }) {
   host.addEventListener('pointerdown', interact); host.addEventListener('keydown', interact); host.addEventListener('click', click);
   document.addEventListener('visibilitychange', visible);
   render(); void poll();
-  return () => { leaving(); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); window.removeEventListener?.('pagehide', leaving); window.removeEventListener?.('pageshow', returned); };
+  return () => { leaving(); document.removeEventListener('pointerdown', closeControls); document.removeEventListener('keydown', closeControls); host.removeEventListener('pointerdown', interact); host.removeEventListener('keydown', interact); host.removeEventListener('click', click); document.removeEventListener('visibilitychange', visible); window.removeEventListener?.('pagehide', leaving); window.removeEventListener?.('pageshow', returned); };
 }
